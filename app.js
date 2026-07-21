@@ -4,7 +4,8 @@
 /* ---------- Region & grid ---------- */
 const REGION = { latMin: 55.3, latMax: 56.75, lonMin: 12.2, lonMax: 16.3 };
 const NX = 15, NY = 9; // grid points: NX lon × NY lat
-const BUFFER_W = 220, BUFFER_H = 140; // offscreen interpolation buffer
+const BUFFER_W = 240, BUFFER_H = 150; // offscreen interpolation buffer
+const EDGE_FADE = 1.6; // grid cells over which the field fades out past the grid edge
 
 const lats = [], lons = [];
 for (let iy = 0; iy < NY; iy++) lats.push(REGION.latMin + (REGION.latMax - REGION.latMin) * iy / (NY - 1));
@@ -15,7 +16,7 @@ const LAYER_DEFS = [
   { id: "temp",     name: "Temperature",    varName: "temperature_2m",       unit: "°C",  min: -25, max: 30,   on: false, opacity: 0.7,  dot: "#f47067" },
   { id: "humidity", name: "Humidity",       varName: "relative_humidity_2m", unit: "%",   min: 0,   max: 100,  on: false, opacity: 0.55, dot: "#39c5cf" },
   { id: "pressure", name: "Air pressure",   varName: "surface_pressure",     unit: "hPa", min: 965, max: 1045, on: false, opacity: 0.55, dot: "#d2a8ff" },
-  { id: "wind",     name: "Wind",           varName: "wind_speed_10m",       unit: "m/s", min: 0,   max: 25,   on: true,  opacity: 0.5,  dot: "#7ee787" },
+  { id: "wind",     name: "Wind",           varName: "wind_speed_10m",       unit: "m/s", min: 0,   max: 25,   on: true,  opacity: 0.35, dot: "#7ee787" },
   { id: "cloud",    name: "Cloud cover",    varName: "cloud_cover",          unit: "%",   min: 0,   max: 100,  on: true,  opacity: 0.85, dot: "#c9d1d9" },
   { id: "precip",   name: "Precipitation",  varName: "precipitation",        unit: "mm/h",min: 0,   max: 15,   on: true,  opacity: 0.9,  dot: "#58a6ff" },
 ];
@@ -41,14 +42,15 @@ const COLORMAPS = {
   humidity: v => stops([[0,247,252,240],[40,178,226,226],[70,84,196,211],[100,8,81,156]], v),
   pressure: v => stops([[965,110,60,170],[995,150,110,200],[1015,120,130,140],[1030,230,170,80],[1045,230,120,40]], v),
   wind:     v => stops([[0,26,152,80],[6,120,198,121],[12,255,237,120],[18,244,140,49],[25,215,25,28]], v),
-  cloud:    v => { const c = Math.max(0, Math.min(100, v)); return [235, 240, 245, c / 100]; },
+  cloud:    v => { const c = Math.max(0, Math.min(100, v)); return [240, 244, 250, Math.pow(c / 100, 0.85)]; },
+  // radar-style: green = light rain, yellow/orange = moderate, red/purple = heavy
   precip:   v => {
     if (v < 0.05) return [0, 0, 0, 0];
-    const f = Math.min(1, v / 15);
-    return [120 + (10 - 120) * f, 190 + (40 - 190) * f, 255 + (180 - 255) * f, Math.min(0.3 + f * 0.7, 0.97)];
+    const c = stops([[0.1,70,200,120],[1,120,220,90],[3,250,235,80],[6,250,160,50],[10,235,60,60],[15,190,70,210]], Math.max(v, 0.1));
+    return [c[0], c[1], c[2], Math.min(0.5 + v / 15 * 0.45, 0.95)];
   },
 };
-const ALPHA_DEFAULT = { temp: 0.75, humidity: 0.6, pressure: 0.6, wind: 0.55, cloud: 1, precip: 1 };
+const ALPHA_DEFAULT = { temp: 0.75, humidity: 0.6, pressure: 0.6, wind: 0.4, cloud: 1, precip: 1 };
 
 /* ---------- State ---------- */
 let weatherData = null;   // array of per-point responses
@@ -76,24 +78,35 @@ L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
   maxZoom: 19,
 }).addTo(map);
 
-// subtle region outline
-L.rectangle([[REGION.latMin, REGION.lonMin], [REGION.latMax, REGION.lonMax]],
-  { color: "#58a6ff", weight: 1, dashArray: "4 6", fill: false, opacity: 0.35, interactive: false }).addTo(map);
-
-// city labels
+/* ---------- City labels (name + live temp) ---------- */
 const CITIES = [
   ["Malmö", 55.605, 13.003], ["Lund", 55.7047, 13.191], ["Helsingborg", 56.0465, 12.6945],
   ["Kristianstad", 56.0313, 14.1567], ["Hässleholm", 56.1589, 13.7664], ["Ystad", 55.4295, 13.82],
   ["Karlskrona", 56.1612, 15.5869], ["Ronneby", 56.21, 15.276], ["Karlshamn", 56.1706, 14.8619],
   ["Sölvesborg", 56.0521, 14.5753],
 ];
-CITIES.forEach(([name, la, lo]) =>
-  L.marker([la, lo], {
-    interactive: false, keyboard: false,
-    icon: L.divIcon({ className: "city-label", html: name, iconSize: [0, 0] }),
-  }).addTo(map));
+function cityIcon(name, t) {
+  return L.divIcon({
+    className: "city-label",
+    html: t == null || isNaN(t) ? name : `${name}&nbsp;<b>${Math.round(t)}°</b>`,
+    iconSize: [0, 0],
+  });
+}
+const cityMarkers = CITIES.map(([name, la, lo]) => ({
+  name, la, lo,
+  marker: L.marker([la, lo], { interactive: false, keyboard: false, icon: cityIcon(name, null) }).addTo(map),
+}));
+function updateCityTemps() {
+  if (!weatherData) return;
+  for (const c of cityMarkers) {
+    const gx = (c.lo - REGION.lonMin) / (REGION.lonMax - REGION.lonMin) * (NX - 1);
+    const gy = (c.la - REGION.latMin) / (REGION.latMax - REGION.latMin) * (NY - 1);
+    if (gx < 0 || gy < 0 || gx > NX - 1 || gy > NY - 1) continue;
+    c.marker.setIcon(cityIcon(c.name, sample("temperature_2m", gx, gy)));
+  }
+}
 
-/* ---------- Canvas overlay ---------- */
+/* ---------- Canvas overlay (full screen, soft edges) ---------- */
 const buffer = document.createElement("canvas");
 buffer.width = BUFFER_W; buffer.height = BUFFER_H;
 const bctx = buffer.getContext("2d");
@@ -110,63 +123,78 @@ function requestRedraw() {
 const WeatherOverlay = L.Layer.extend({
   onAdd(m) {
     this._map = m;
-    this._canvas = L.DomUtil.create("canvas", "weather-overlay");
-    m.getPanes().overlayPane.appendChild(this._canvas);
+    const pane = m.getPanes().overlayPane;
+    this._colors = L.DomUtil.create("canvas", "weather-colors");
+    this._arrows = L.DomUtil.create("canvas", "weather-arrows");
+    pane.appendChild(this._colors);
+    pane.appendChild(this._arrows);
     this._resetBound = this._reset.bind(this);
     m.on("moveend zoomend resize", this._resetBound);
     this._reset();
   },
   onRemove(m) {
     m.off("moveend zoomend resize", this._resetBound);
-    L.DomUtil.remove(this._canvas);
+    L.DomUtil.remove(this._colors);
+    L.DomUtil.remove(this._arrows);
   },
   _reset() {
-    const nw = this._map.latLngToLayerPoint([REGION.latMax, REGION.lonMin]);
-    const se = this._map.latLngToLayerPoint([REGION.latMin, REGION.lonMax]);
-    this._nw = nw;
-    this._w = Math.max(1, Math.round(se.x - nw.x));
-    this._h = Math.max(1, Math.round(se.y - nw.y));
-    this._canvas.width = this._w; this._canvas.height = this._h;
-    L.DomUtil.setPosition(this._canvas, nw);
+    const size = this._map.getSize();
+    this._w = Math.max(1, size.x);
+    this._h = Math.max(1, size.y);
+    this._colors.width = this._arrows.width = this._w;
+    this._colors.height = this._arrows.height = this._h;
+    this._origin = this._map.containerPointToLayerPoint(L.point(0, 0));
+    L.DomUtil.setPosition(this._colors, this._origin);
+    L.DomUtil.setPosition(this._arrows, this._origin);
     requestRedraw();
   },
   redraw() {
     if (!weatherData) return;
-    const ctx = this._canvas.getContext("2d");
-    const px = img.data;
     const active = RENDER_ORDER.filter(id => layerState[id].on && layerState[id].opacity > 0);
+    const px = img.data;
     for (let by = 0; by < BUFFER_H; by++) {
       for (let bx = 0; bx < BUFFER_W; bx++) {
-        const lp = L.point(this._nw.x + (bx + 0.5) / BUFFER_W * this._w,
-                           this._nw.y + (by + 0.5) / BUFFER_H * this._h);
+        const lp = L.point(this._origin.x + (bx + 0.5) / BUFFER_W * this._w,
+                           this._origin.y + (by + 0.5) / BUFFER_H * this._h);
         const ll = this._map.layerPointToLatLng(lp);
         const gx = (ll.lng - REGION.lonMin) / (REGION.lonMax - REGION.lonMin) * (NX - 1);
         const gy = (ll.lat - REGION.latMin) / (REGION.latMax - REGION.latMin) * (NY - 1);
         const o = (by * BUFFER_W + bx) * 4;
-        if (gx < 0 || gy < 0 || gx > NX - 1 || gy > NY - 1) { px[o + 3] = 0; continue; }
+        // soft fade past the grid edge instead of a hard rectangle
+        const ox = Math.max(-gx, gx - (NX - 1), 0);
+        const oy = Math.max(-gy, gy - (NY - 1), 0);
+        const dEdge = Math.hypot(ox, oy);
+        if (dEdge >= EDGE_FADE) { px[o + 3] = 0; continue; }
+        const t = dEdge / EDGE_FADE;
+        const feather = 1 - t * t * (3 - 2 * t); // smoothstep fade
+        const cgx = Math.min(Math.max(gx, 0), NX - 1);
+        const cgy = Math.min(Math.max(gy, 0), NY - 1);
         let r = 0, g = 0, b = 0, a = 0;
         for (const id of active) {
-          const v = sample(LAYER_DEFS.find(d => d.id === id).varName, gx, gy);
+          const v = sample(LAYER_DEFS.find(d => d.id === id).varName, cgx, cgy);
           if (v == null || isNaN(v)) continue;
           const c = COLORMAPS[id](v);
-          let ca = (c.length > 3 ? c[3] : ALPHA_DEFAULT[id]) * layerState[id].opacity;
+          const ca = (c.length > 3 ? c[3] : ALPHA_DEFAULT[id]) * layerState[id].opacity;
           if (ca <= 0) continue;
-          // source-over
           r = c[0] * ca + r * (1 - ca);
           g = c[1] * ca + g * (1 - ca);
           b = c[2] * ca + b * (1 - ca);
           a = ca + a * (1 - ca);
         }
+        a *= feather;
         if (a > 0.001) { px[o] = r / a; px[o + 1] = g / a; px[o + 2] = b / a; px[o + 3] = a * 255; }
         else px[o + 3] = 0;
       }
     }
     bctx.putImageData(img, 0, 0);
+    const ctx = this._colors.getContext("2d");
     ctx.clearRect(0, 0, this._w, this._h);
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(buffer, 0, 0, this._w, this._h);
 
-    // wind arrows on top
+    // wind arrows on the un-blurred canvas
+    const actx = this._arrows.getContext("2d");
+    actx.clearRect(0, 0, this._w, this._h);
     if (layerState.wind.on) {
       for (let iy = 0; iy < NY; iy++) for (let ix = 0; ix < NX; ix++) {
         const loc = weatherData[iy * NX + ix];
@@ -174,28 +202,28 @@ const WeatherOverlay = L.Layer.extend({
         const dir = loc.hourly.wind_direction_10m[timeIdx];
         if (spd == null || dir == null) continue;
         const p = this._map.latLngToLayerPoint([lats[iy], lons[ix]]);
-        const x = p.x - this._nw.x, y = p.y - this._nw.y;
-        if (x < 0 || y < 0 || x > this._w || y > this._h) continue;
-        const rad = (dir + 180) * Math.PI / 180; // point where wind goes to
-        const len = Math.min(6 + spd * 1.6, 34);
+        const x = p.x - this._origin.x, y = p.y - this._origin.y;
+        if (x < -20 || y < -20 || x > this._w + 20 || y > this._h + 20) continue;
+        const rad = (dir + 180) * Math.PI / 180; // point where the wind is going
+        const len = Math.min(7 + spd * 1.7, 36);
         const dx = Math.sin(rad) * len, dy = -Math.cos(rad) * len;
-        const c = COLORMAPS.wind(spd);
-        ctx.strokeStyle = ctx.fillStyle = `rgba(${c[0]|0},${c[1]|0},${c[2]|0},0.95)`;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(x - dx * 0.5, y - dy * 0.5);
-        ctx.lineTo(x + dx * 0.5, y + dy * 0.5);
-        ctx.stroke();
-        // arrowhead
+        actx.strokeStyle = actx.fillStyle = "rgba(235,240,245,0.85)";
+        actx.lineWidth = 2;
+        actx.beginPath();
+        actx.moveTo(x - dx * 0.5, y - dy * 0.5);
+        actx.lineTo(x + dx * 0.5, y + dy * 0.5);
+        actx.stroke();
         const tx = x + dx * 0.5, ty = y + dy * 0.5, s = 5;
         const ux = dx / len, uy = dy / len;
-        ctx.beginPath();
-        ctx.moveTo(tx, ty);
-        ctx.lineTo(tx - ux * s - uy * s * 0.6, ty - uy * s + ux * s * 0.6);
-        ctx.lineTo(tx - ux * s + uy * s * 0.6, ty - uy * s - ux * s * 0.6);
-        ctx.closePath(); ctx.fill();
+        actx.beginPath();
+        actx.moveTo(tx, ty);
+        actx.lineTo(tx - ux * s - uy * s * 0.6, ty - uy * s + ux * s * 0.6);
+        actx.lineTo(tx - ux * s + uy * s * 0.6, ty - uy * s - ux * s * 0.6);
+        actx.closePath();
+        actx.fill();
       }
     }
+    updateCityTemps();
   },
 });
 overlay = new WeatherOverlay();
@@ -237,6 +265,7 @@ async function loadData() {
   document.getElementById("loading").style.display = "none";
   requestRedraw();
   buildLegend();
+  setPlaying(true); // autoplay so the weather movement is visible immediately
 }
 
 /* ---------- UI: layer panel ---------- */
@@ -287,9 +316,14 @@ function buildLegend() {
 }
 
 /* ---------- UI: time ---------- */
+const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function fmtTime(t) {
+  const d = new Date(t);
+  return `${DAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]}, ${String(d.getHours()).padStart(2, "0")}:00`;
+}
 function updateTimeLabel() {
-  document.getElementById("time-label").textContent =
-    times.length ? times[timeIdx].replace("T", " ") : "–";
+  document.getElementById("time-label").textContent = times.length ? fmtTime(times[timeIdx]) : "–";
 }
 document.getElementById("time-slider").addEventListener("input", e => {
   timeIdx = +e.target.value;
@@ -297,18 +331,20 @@ document.getElementById("time-slider").addEventListener("input", e => {
   requestRedraw();
 });
 const playBtn = document.getElementById("play-btn");
-playBtn.addEventListener("click", () => {
-  playing = !playing;
+function setPlaying(on) {
+  playing = on;
   playBtn.textContent = playing ? "❚❚" : "▶";
   if (playing) {
+    clearInterval(playTimer);
     playTimer = setInterval(() => {
       timeIdx = (timeIdx + 1) % times.length;
       document.getElementById("time-slider").value = timeIdx;
       updateTimeLabel();
       requestRedraw();
-    }, 500);
+    }, 600);
   } else clearInterval(playTimer);
-});
+}
+playBtn.addEventListener("click", () => setPlaying(!playing));
 
 /* ---------- UI: hover readout ---------- */
 const readoutBody = document.getElementById("readout-body");
