@@ -7,11 +7,86 @@
 const REGION = { latMin: 55.3, latMax: 56.75, lonMin: 12.2, lonMax: 16.3 };
 const NX = 15, NY = 9; // grid points: NX lon × NY lat
 const BUFFER_W = 240, BUFFER_H = 150; // offscreen interpolation buffer
-const EDGE_FADE = 1.6; // grid cells over which rain blobs fade past the grid edge
 
 const lats = [], lons = [];
 for (let iy = 0; iy < NY; iy++) lats.push(REGION.latMin + (REGION.latMax - REGION.latMin) * iy / (NY - 1));
 for (let ix = 0; ix < NX; ix++) lons.push(REGION.lonMin + (REGION.lonMax - REGION.lonMin) * ix / (NX - 1));
+
+/* ---------- Land mask (clip overlays to the Skåne & Blekinge land outline) ---------- */
+// LAND_RINGS ([lon, lat] exterior rings) comes from land.js
+const LAND_BBOX = { latMin: Infinity, latMax: -Infinity, lonMin: Infinity, lonMax: -Infinity };
+const RING_BBOX = LAND_RINGS.map(ring => {
+  const b = { latMin: Infinity, latMax: -Infinity, lonMin: Infinity, lonMax: -Infinity };
+  ring.forEach(([lo, la]) => {
+    if (lo < b.lonMin) b.lonMin = lo; if (lo > b.lonMax) b.lonMax = lo;
+    if (la < b.latMin) b.latMin = la; if (la > b.latMax) b.latMax = la;
+    if (lo < LAND_BBOX.lonMin) LAND_BBOX.lonMin = lo; if (lo > LAND_BBOX.lonMax) LAND_BBOX.lonMax = lo;
+    if (la < LAND_BBOX.latMin) LAND_BBOX.latMin = la; if (la > LAND_BBOX.latMax) LAND_BBOX.latMax = la;
+  });
+  return b;
+});
+
+function landPointInside(lon, lat) {
+  if (lon < LAND_BBOX.lonMin || lon > LAND_BBOX.lonMax || lat < LAND_BBOX.latMin || lat > LAND_BBOX.latMax) return false;
+  for (let r = 0; r < LAND_RINGS.length; r++) {
+    const b = RING_BBOX[r];
+    if (lon < b.lonMin || lon > b.lonMax || lat < b.latMin || lat > b.latMax) continue;
+    const ring = LAND_RINGS[r];
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+      if ((yi > lat) !== (yj > lat) && lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) inside = !inside;
+    }
+    if (inside) return true;
+  }
+  return false;
+}
+
+// min distance (degrees) from a point to any ring edge — for coastal grid points
+function landDistDeg(lon, lat) {
+  let best = Infinity;
+  for (let r = 0; r < LAND_RINGS.length; r++) {
+    const b = RING_BBOX[r];
+    if (lon < b.lonMin - 0.4 || lon > b.lonMax + 0.4 || lat < b.latMin - 0.4 || lat > b.latMax + 0.4) continue;
+    const ring = LAND_RINGS[r];
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+      const dx = xj - xi, dy = yj - yi;
+      const len2 = dx * dx + dy * dy;
+      let t = len2 ? ((lon - xi) * dx + (lat - yi) * dy) / len2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      const d = Math.hypot(lon - (xi + t * dx), lat - (yi + t * dy));
+      if (d < best) best = d;
+    }
+  }
+  return best;
+}
+
+// binary land mask over REGION, bilinearly sampled → soft coastline feather (~1 mask cell)
+const landMask = new Float32Array(BUFFER_W * BUFFER_H);
+for (let my = 0; my < BUFFER_H; my++) {
+  const la = REGION.latMin + (REGION.latMax - REGION.latMin) * my / (BUFFER_H - 1);
+  for (let mx = 0; mx < BUFFER_W; mx++) {
+    const lo = REGION.lonMin + (REGION.lonMax - REGION.lonMin) * mx / (BUFFER_W - 1);
+    landMask[my * BUFFER_W + mx] = landPointInside(lo, la) ? 1 : 0;
+  }
+}
+function landFactor(lon, lat) {
+  const gx = (lon - REGION.lonMin) / (REGION.lonMax - REGION.lonMin) * (BUFFER_W - 1);
+  const gy = (lat - REGION.latMin) / (REGION.latMax - REGION.latMin) * (BUFFER_H - 1);
+  if (gx < 0 || gy < 0 || gx > BUFFER_W - 1 || gy > BUFFER_H - 1) return 0;
+  const x0 = Math.min(Math.floor(gx), BUFFER_W - 2), y0 = Math.min(Math.floor(gy), BUFFER_H - 2);
+  const fx = gx - x0, fy = gy - y0;
+  const m00 = landMask[y0 * BUFFER_W + x0], m10 = landMask[y0 * BUFFER_W + x0 + 1];
+  const m01 = landMask[(y0 + 1) * BUFFER_W + x0], m11 = landMask[(y0 + 1) * BUFFER_W + x0 + 1];
+  return m00 * (1 - fx) * (1 - fy) + m10 * fx * (1 - fy) + m01 * (1 - fx) * fy + m11 * fx * fy;
+}
+
+// per grid point: near enough to land to show temp/wind? (coastal cities like
+// Helsingborg and Karlskrona sit on the shoreline/islands, so allow ~0.2° offshore)
+const gridOnLand = [];
+for (let iy = 0; iy < NY; iy++) for (let ix = 0; ix < NX; ix++)
+  gridOnLand.push(landPointInside(lons[ix], lats[iy]) || landDistDeg(lons[ix], lats[iy]) < 0.2);
 
 /* ---------- Layers ---------- */
 // kind: "field" = colour blob on the soft canvas · "arrows" = wind arrows · "labels" = temp numbers
@@ -57,14 +132,14 @@ LAYER_DEFS.forEach(d => layerState[d.id] = { on: d.on, opacity: d.opacity });
 
 /* ---------- Map ---------- */
 const map = L.map("map", {
-  center: [56.0, 14.2],
-  zoom: 8,
   minZoom: 7,
   maxZoom: 12,
   maxBounds: [[REGION.latMin - 0.6, REGION.lonMin - 1.2], [REGION.latMax + 0.6, REGION.lonMax + 1.2]],
   maxBoundsViscosity: 0.8,
   zoomControl: false,
 });
+// open with the land area filling the view
+map.fitBounds([[LAND_BBOX.latMin, LAND_BBOX.lonMin], [LAND_BBOX.latMax, LAND_BBOX.lonMax]], { padding: [16, 16] });
 L.control.zoom({ position: "bottomright" }).addTo(map);
 L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a> | Data: Open-Meteo',
@@ -154,18 +229,14 @@ const WeatherOverlay = L.Layer.extend({
         const lp = L.point(this._origin.x + (bx + 0.5) / BUFFER_W * this._w,
                            this._origin.y + (by + 0.5) / BUFFER_H * this._h);
         const ll = this._map.layerPointToLatLng(lp);
+        const f = landFactor(ll.lng, ll.lat);
+        if (f <= 0.01) { px[o + 3] = 0; continue; }
         const gx = (ll.lng - REGION.lonMin) / (REGION.lonMax - REGION.lonMin) * (NX - 1);
         const gy = (ll.lat - REGION.latMin) / (REGION.latMax - REGION.latMin) * (NY - 1);
-        const ox = Math.max(-gx, gx - (NX - 1), 0);
-        const oy = Math.max(-gy, gy - (NY - 1), 0);
-        const dEdge = Math.hypot(ox, oy);
-        if (dEdge >= EDGE_FADE) { px[o + 3] = 0; continue; }
-        const t = dEdge / EDGE_FADE;
-        const feather = 1 - t * t * (3 - 2 * t);
         const v = sample("precipitation", Math.min(Math.max(gx, 0), NX - 1), Math.min(Math.max(gy, 0), NY - 1));
         if (v == null || isNaN(v)) { px[o + 3] = 0; continue; }
         const c = COLORMAPS.precip(v);
-        const a = c[3] * alpha * feather;
+        const a = c[3] * alpha * f;
         if (a > 0.001) { px[o] = c[0]; px[o + 1] = c[1]; px[o + 2] = c[2]; px[o + 3] = a * 255; }
         else px[o + 3] = 0;
       }
@@ -190,6 +261,7 @@ const WeatherOverlay = L.Layer.extend({
       ctx.textBaseline = "middle";
       ctx.font = "600 13px 'Segoe UI', system-ui, sans-serif";
       for (let iy = 0; iy < NY; iy += 2) for (let ix = 0; ix < NX; ix += 2) {
+        if (!gridOnLand[iy * NX + ix]) continue;
         const t = weatherData[iy * NX + ix].hourly.temperature_2m[timeIdx];
         if (t == null) continue;
         const { x, y } = pt(iy, ix);
@@ -207,6 +279,7 @@ const WeatherOverlay = L.Layer.extend({
     // wind arrows, colour = speed, direction = where the wind is going
     if (layerState.wind.on) {
       for (let iy = 0; iy < NY; iy++) for (let ix = 0; ix < NX; ix++) {
+        if (!gridOnLand[iy * NX + ix]) continue;
         const loc = weatherData[iy * NX + ix];
         const spd = loc.hourly.wind_speed_10m[timeIdx];
         const dir = loc.hourly.wind_direction_10m[timeIdx];
@@ -275,7 +348,6 @@ async function loadData() {
   document.getElementById("loading").style.display = "none";
   requestRedraw();
   buildLegend();
-  setPlaying(true); // autoplay so the weather movement is visible immediately
 }
 
 /* ---------- UI: layer panel ---------- */
