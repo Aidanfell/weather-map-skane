@@ -1,5 +1,7 @@
 # Skåne & Blekinge Weather Map
 
+**Live: https://aidanfell.github.io/weather-map-skane/**
+
 An interactive meteorological map covering only southern Sweden (Skåne & Blekinge).
 Pure static site — no build step, no API key. Data: [Open-Meteo](https://open-meteo.com/) (free).
 
