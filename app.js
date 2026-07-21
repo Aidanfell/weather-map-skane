@@ -257,7 +257,7 @@ async function loadData() {
   const url = "https://api.open-meteo.com/v1/forecast"
     + "?latitude=" + latParam.join(",") + "&longitude=" + lonParam.join(",")
     + "&hourly=temperature_2m,precipitation,wind_speed_10m,wind_direction_10m"
-    + "&wind_speed_unit=ms&forecast_days=3&timezone=auto";
+    + "&wind_speed_unit=ms&forecast_days=6&timezone=auto";
   const res = await fetch(url);
   if (!res.ok) throw new Error("Open-Meteo request failed: HTTP " + res.status);
   const json = await res.json();

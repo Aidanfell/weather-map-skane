@@ -8,7 +8,7 @@ Pure static site — no build step, no API key. Data: [Open-Meteo](https://open-
 ## Features
 
 - Leaflet map locked to the Skåne / Blekinge region (dark CARTO basemap)
-- Live 72 h forecast from Open-Meteo on a 15×9 point grid over the region
+- Live 5-day forecast (today + 5 days, hourly) from Open-Meteo on a 15×9 point grid over the region
 - Three focused layers (toggle + opacity slider each):
   - **Precipitation** — radar-style blobs (green → yellow → red), drawn only where it rains
   - **Wind** — arrows: colour = speed, direction = where the wind is going
