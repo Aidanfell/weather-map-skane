@@ -356,25 +356,41 @@ function setPlaying(on) {
 }
 playBtn.addEventListener("click", () => setPlaying(!playing));
 
-/* ---------- UI: hover readout ---------- */
+/* ---------- UI: readout (hover on desktop, tap on mobile) ---------- */
 const readoutBody = document.getElementById("readout-body");
+function showReadout(latlng) {
+  if (!weatherData) return;
+  const gx = (latlng.lng - REGION.lonMin) / (REGION.lonMax - REGION.lonMin) * (NX - 1);
+  const gy = (latlng.lat - REGION.latMin) / (REGION.latMax - REGION.latMin) * (NY - 1);
+  if (gx < 0 || gy < 0 || gx > NX - 1 || gy > NY - 1) { readoutBody.textContent = "Outside region"; return; }
+  let html = "";
+  LAYER_DEFS.forEach(d => {
+    const v = sample(d.varName, gx, gy);
+    if (v != null) html += `<div><span>${d.name}</span><span>${v.toFixed(1)} ${d.unit}</span></div>`;
+  });
+  readoutBody.innerHTML = html;
+}
 let readoutQueued = false;
 map.on("mousemove", e => {
-  if (!weatherData || readoutQueued) return;
+  if (readoutQueued) return;
   readoutQueued = true;
-  requestAnimationFrame(() => {
-    readoutQueued = false;
-    const gx = (e.latlng.lng - REGION.lonMin) / (REGION.lonMax - REGION.lonMin) * (NX - 1);
-    const gy = (e.latlng.lat - REGION.latMin) / (REGION.latMax - REGION.latMin) * (NY - 1);
-    if (gx < 0 || gy < 0 || gx > NX - 1 || gy > NY - 1) { readoutBody.textContent = "Outside region"; return; }
-    let html = "";
-    LAYER_DEFS.forEach(d => {
-      const v = sample(d.varName, gx, gy);
-      if (v != null) html += `<div><span>${d.name}</span><span>${v.toFixed(1)} ${d.unit}</span></div>`;
-    });
-    readoutBody.innerHTML = html;
-  });
+  requestAnimationFrame(() => { readoutQueued = false; showReadout(e.latlng); });
 });
+// touch support: tap a point to inspect it
+let inspectMarker = null;
+map.on("click", e => {
+  showReadout(e.latlng);
+  if (!inspectMarker) {
+    inspectMarker = L.circleMarker(e.latlng, {
+      radius: 7, color: "#79c0ff", weight: 2, fill: false, interactive: false,
+    }).addTo(map);
+  } else inspectMarker.setLatLng(e.latlng);
+});
+
+/* ---------- UI: collapsible layer panel ---------- */
+const layerPanel = document.getElementById("layer-panel");
+layerPanel.querySelector("h2").addEventListener("click", () => layerPanel.classList.toggle("collapsed"));
+if (window.innerWidth <= 640) layerPanel.classList.add("collapsed");
 
 /* ---------- Go ---------- */
 buildLayerPanel();
