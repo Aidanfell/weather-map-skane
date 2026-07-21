@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Skåne & Blekinge Weather Map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="map"></div>
+
+<div id="layer-panel" class="panel">
+  <h2>Layers</h2>
+  <div id="layer-rows"></div>
+</div>
+
+<div id="readout" class="panel">
+  <h2>Point values</h2>
+  <div id="readout-body">Hover the map…</div>
+</div>
+
+<div id="legend" class="panel"></div>
+
+<div id="time-bar" class="panel">
+  <button id="play-btn" title="Play/Pause">▶</button>
+  <input type="range" id="time-slider" min="0" max="0" value="0" step="1">
+  <span id="time-label">–</span>
+</div>
+
+<div id="loading"><div class="spinner"></div><p>Loading weather data…</p></div>
+<div id="error-banner" hidden></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
