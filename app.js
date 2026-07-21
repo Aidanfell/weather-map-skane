@@ -1,29 +1,27 @@
-/* Skåne & Blekinge weather map — data: Open-Meteo (free, no key) */
+/* Skåne & Blekinge weather map — data: Open-Meteo (free, no key)
+   Three things only: incoming rain (radar blobs), wind (speed-coloured arrows),
+   temperature (coloured numbers). No background washes. */
 "use strict";
 
 /* ---------- Region & grid ---------- */
 const REGION = { latMin: 55.3, latMax: 56.75, lonMin: 12.2, lonMax: 16.3 };
 const NX = 15, NY = 9; // grid points: NX lon × NY lat
 const BUFFER_W = 240, BUFFER_H = 150; // offscreen interpolation buffer
-const EDGE_FADE = 1.6; // grid cells over which the field fades out past the grid edge
+const EDGE_FADE = 1.6; // grid cells over which rain blobs fade past the grid edge
 
 const lats = [], lons = [];
 for (let iy = 0; iy < NY; iy++) lats.push(REGION.latMin + (REGION.latMax - REGION.latMin) * iy / (NY - 1));
 for (let ix = 0; ix < NX; ix++) lons.push(REGION.lonMin + (REGION.lonMax - REGION.lonMin) * ix / (NX - 1));
 
 /* ---------- Layers ---------- */
+// kind: "field" = colour blob on the soft canvas · "arrows" = wind arrows · "labels" = temp numbers
 const LAYER_DEFS = [
-  { id: "temp",     name: "Temperature",    varName: "temperature_2m",       unit: "°C",  min: -25, max: 30,   on: false, opacity: 0.7,  dot: "#f47067" },
-  { id: "humidity", name: "Humidity",       varName: "relative_humidity_2m", unit: "%",   min: 0,   max: 100,  on: false, opacity: 0.55, dot: "#39c5cf" },
-  { id: "pressure", name: "Air pressure",   varName: "surface_pressure",     unit: "hPa", min: 965, max: 1045, on: false, opacity: 0.55, dot: "#d2a8ff" },
-  { id: "wind",     name: "Wind",           varName: "wind_speed_10m",       unit: "m/s", min: 0,   max: 25,   on: true,  opacity: 0.35, dot: "#7ee787" },
-  { id: "cloud",    name: "Cloud cover",    varName: "cloud_cover",          unit: "%",   min: 0,   max: 100,  on: true,  opacity: 0.85, dot: "#c9d1d9" },
-  { id: "precip",   name: "Precipitation",  varName: "precipitation",        unit: "mm/h",min: 0,   max: 15,   on: true,  opacity: 0.9,  dot: "#58a6ff" },
+  { id: "temp",   name: "Temperature",   varName: "temperature_2m",   unit: "°C",   min: -10, max: 30, on: true, opacity: 1.0,  dot: "#f47067", kind: "labels" },
+  { id: "wind",   name: "Wind",          varName: "wind_speed_10m",   unit: "m/s",  min: 0,   max: 25, on: true, opacity: 1.0,  dot: "#7ee787", kind: "arrows" },
+  { id: "precip", name: "Precipitation", varName: "precipitation",    unit: "mm/h", min: 0,   max: 15, on: true, opacity: 0.9,  dot: "#58a6ff", kind: "field"  },
 ];
-// render order: first = bottom, last = top
-const RENDER_ORDER = ["temp", "humidity", "pressure", "wind", "cloud", "precip"];
 
-/* ---------- Colour maps ---------- */
+/* ---------- Colour scales ---------- */
 function stops(stopsArr, v) {
   if (v <= stopsArr[0][0]) return stopsArr[0].slice(1);
   const last = stopsArr[stopsArr.length - 1];
@@ -38,19 +36,15 @@ function stops(stopsArr, v) {
   return last.slice(1);
 }
 const COLORMAPS = {
-  temp:     v => stops([[-25,49,54,149],[-10,69,117,180],[0,116,173,209],[10,171,221,164],[18,255,255,150],[24,255,190,80],[30,215,25,28]], v),
-  humidity: v => stops([[0,247,252,240],[40,178,226,226],[70,84,196,211],[100,8,81,156]], v),
-  pressure: v => stops([[965,110,60,170],[995,150,110,200],[1015,120,130,140],[1030,230,170,80],[1045,230,120,40]], v),
-  wind:     v => stops([[0,26,152,80],[6,120,198,121],[12,255,237,120],[18,244,140,49],[25,215,25,28]], v),
-  cloud:    v => { const c = Math.max(0, Math.min(100, v)); return [240, 244, 250, Math.pow(c / 100, 0.85)]; },
+  temp: v => stops([[-10,80,140,255],[0,110,200,230],[10,120,210,150],[18,255,230,110],[24,255,160,60],[30,235,60,60]], v),
+  wind: v => stops([[0,140,220,160],[6,120,200,255],[12,255,230,110],[18,255,150,50],[25,235,60,60]], v),
   // radar-style: green = light rain, yellow/orange = moderate, red/purple = heavy
-  precip:   v => {
+  precip: v => {
     if (v < 0.05) return [0, 0, 0, 0];
     const c = stops([[0.1,70,200,120],[1,120,220,90],[3,250,235,80],[6,250,160,50],[10,235,60,60],[15,190,70,210]], Math.max(v, 0.1));
     return [c[0], c[1], c[2], Math.min(0.5 + v / 15 * 0.45, 0.95)];
   },
 };
-const ALPHA_DEFAULT = { temp: 0.75, humidity: 0.6, pressure: 0.6, wind: 0.4, cloud: 1, precip: 1 };
 
 /* ---------- State ---------- */
 let weatherData = null;   // array of per-point responses
@@ -78,35 +72,20 @@ L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
   maxZoom: 19,
 }).addTo(map);
 
-/* ---------- City labels (name + live temp) ---------- */
+// city names for orientation
 const CITIES = [
   ["Malmö", 55.605, 13.003], ["Lund", 55.7047, 13.191], ["Helsingborg", 56.0465, 12.6945],
   ["Kristianstad", 56.0313, 14.1567], ["Hässleholm", 56.1589, 13.7664], ["Ystad", 55.4295, 13.82],
   ["Karlskrona", 56.1612, 15.5869], ["Ronneby", 56.21, 15.276], ["Karlshamn", 56.1706, 14.8619],
   ["Sölvesborg", 56.0521, 14.5753],
 ];
-function cityIcon(name, t) {
-  return L.divIcon({
-    className: "city-label",
-    html: t == null || isNaN(t) ? name : `${name}&nbsp;<b>${Math.round(t)}°</b>`,
-    iconSize: [0, 0],
-  });
-}
-const cityMarkers = CITIES.map(([name, la, lo]) => ({
-  name, la, lo,
-  marker: L.marker([la, lo], { interactive: false, keyboard: false, icon: cityIcon(name, null) }).addTo(map),
-}));
-function updateCityTemps() {
-  if (!weatherData) return;
-  for (const c of cityMarkers) {
-    const gx = (c.lo - REGION.lonMin) / (REGION.lonMax - REGION.lonMin) * (NX - 1);
-    const gy = (c.la - REGION.latMin) / (REGION.latMax - REGION.latMin) * (NY - 1);
-    if (gx < 0 || gy < 0 || gx > NX - 1 || gy > NY - 1) continue;
-    c.marker.setIcon(cityIcon(c.name, sample("temperature_2m", gx, gy)));
-  }
-}
+CITIES.forEach(([name, la, lo]) =>
+  L.marker([la, lo], {
+    interactive: false, keyboard: false,
+    icon: L.divIcon({ className: "city-label", html: name, iconSize: [0, 0] }),
+  }).addTo(map));
 
-/* ---------- Canvas overlay (full screen, soft edges) ---------- */
+/* ---------- Canvas overlays ---------- */
 const buffer = document.createElement("canvas");
 buffer.width = BUFFER_W; buffer.height = BUFFER_H;
 const bctx = buffer.getContext("2d");
@@ -120,14 +99,24 @@ function requestRedraw() {
   requestAnimationFrame(() => { redrawQueued = false; if (overlay) overlay.redraw(); });
 }
 
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
 const WeatherOverlay = L.Layer.extend({
   onAdd(m) {
     this._map = m;
     const pane = m.getPanes().overlayPane;
     this._colors = L.DomUtil.create("canvas", "weather-colors");
-    this._arrows = L.DomUtil.create("canvas", "weather-arrows");
+    this._marks = L.DomUtil.create("canvas", "weather-arrows");
     pane.appendChild(this._colors);
-    pane.appendChild(this._arrows);
+    pane.appendChild(this._marks);
     this._resetBound = this._reset.bind(this);
     m.on("moveend zoomend resize", this._resetBound);
     this._reset();
@@ -135,54 +124,49 @@ const WeatherOverlay = L.Layer.extend({
   onRemove(m) {
     m.off("moveend zoomend resize", this._resetBound);
     L.DomUtil.remove(this._colors);
-    L.DomUtil.remove(this._arrows);
+    L.DomUtil.remove(this._marks);
   },
   _reset() {
     const size = this._map.getSize();
     this._w = Math.max(1, size.x);
     this._h = Math.max(1, size.y);
-    this._colors.width = this._arrows.width = this._w;
-    this._colors.height = this._arrows.height = this._h;
+    this._colors.width = this._marks.width = this._w;
+    this._colors.height = this._marks.height = this._h;
     this._origin = this._map.containerPointToLayerPoint(L.point(0, 0));
     L.DomUtil.setPosition(this._colors, this._origin);
-    L.DomUtil.setPosition(this._arrows, this._origin);
+    L.DomUtil.setPosition(this._marks, this._origin);
     requestRedraw();
   },
   redraw() {
     if (!weatherData) return;
-    const active = RENDER_ORDER.filter(id => layerState[id].on && layerState[id].opacity > 0);
+    this._drawRain();
+    this._drawMarks();
+  },
+  // rain blobs only — nothing is drawn where it doesn't rain
+  _drawRain() {
     const px = img.data;
+    const on = layerState.precip.on && layerState.precip.opacity > 0;
+    const alpha = layerState.precip.opacity;
     for (let by = 0; by < BUFFER_H; by++) {
       for (let bx = 0; bx < BUFFER_W; bx++) {
+        const o = (by * BUFFER_W + bx) * 4;
+        if (!on) { px[o + 3] = 0; continue; }
         const lp = L.point(this._origin.x + (bx + 0.5) / BUFFER_W * this._w,
                            this._origin.y + (by + 0.5) / BUFFER_H * this._h);
         const ll = this._map.layerPointToLatLng(lp);
         const gx = (ll.lng - REGION.lonMin) / (REGION.lonMax - REGION.lonMin) * (NX - 1);
         const gy = (ll.lat - REGION.latMin) / (REGION.latMax - REGION.latMin) * (NY - 1);
-        const o = (by * BUFFER_W + bx) * 4;
-        // soft fade past the grid edge instead of a hard rectangle
         const ox = Math.max(-gx, gx - (NX - 1), 0);
         const oy = Math.max(-gy, gy - (NY - 1), 0);
         const dEdge = Math.hypot(ox, oy);
         if (dEdge >= EDGE_FADE) { px[o + 3] = 0; continue; }
         const t = dEdge / EDGE_FADE;
-        const feather = 1 - t * t * (3 - 2 * t); // smoothstep fade
-        const cgx = Math.min(Math.max(gx, 0), NX - 1);
-        const cgy = Math.min(Math.max(gy, 0), NY - 1);
-        let r = 0, g = 0, b = 0, a = 0;
-        for (const id of active) {
-          const v = sample(LAYER_DEFS.find(d => d.id === id).varName, cgx, cgy);
-          if (v == null || isNaN(v)) continue;
-          const c = COLORMAPS[id](v);
-          const ca = (c.length > 3 ? c[3] : ALPHA_DEFAULT[id]) * layerState[id].opacity;
-          if (ca <= 0) continue;
-          r = c[0] * ca + r * (1 - ca);
-          g = c[1] * ca + g * (1 - ca);
-          b = c[2] * ca + b * (1 - ca);
-          a = ca + a * (1 - ca);
-        }
-        a *= feather;
-        if (a > 0.001) { px[o] = r / a; px[o + 1] = g / a; px[o + 2] = b / a; px[o + 3] = a * 255; }
+        const feather = 1 - t * t * (3 - 2 * t);
+        const v = sample("precipitation", Math.min(Math.max(gx, 0), NX - 1), Math.min(Math.max(gy, 0), NY - 1));
+        if (v == null || isNaN(v)) { px[o + 3] = 0; continue; }
+        const c = COLORMAPS.precip(v);
+        const a = c[3] * alpha * feather;
+        if (a > 0.001) { px[o] = c[0]; px[o + 1] = c[1]; px[o + 2] = c[2]; px[o + 3] = a * 255; }
         else px[o + 3] = 0;
       }
     }
@@ -191,39 +175,65 @@ const WeatherOverlay = L.Layer.extend({
     ctx.clearRect(0, 0, this._w, this._h);
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(buffer, 0, 0, this._w, this._h);
-
-    // wind arrows on the un-blurred canvas
-    const actx = this._arrows.getContext("2d");
-    actx.clearRect(0, 0, this._w, this._h);
+  },
+  // crisp canvas: temperature numbers + wind arrows
+  _drawMarks() {
+    const ctx = this._marks.getContext("2d");
+    ctx.clearRect(0, 0, this._w, this._h);
+    const pt = (iy, ix) => {
+      const p = this._map.latLngToLayerPoint([lats[iy], lons[ix]]);
+      return { x: p.x - this._origin.x, y: p.y - this._origin.y };
+    };
+    // temperature numbers on every other grid point
+    if (layerState.temp.on) {
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = "600 13px 'Segoe UI', system-ui, sans-serif";
+      for (let iy = 0; iy < NY; iy += 2) for (let ix = 0; ix < NX; ix += 2) {
+        const t = weatherData[iy * NX + ix].hourly.temperature_2m[timeIdx];
+        if (t == null) continue;
+        const { x, y } = pt(iy, ix);
+        if (x < -20 || y < -20 || x > this._w + 20 || y > this._h + 20) continue;
+        const label = Math.round(t) + "°";
+        const w = ctx.measureText(label).width + 12;
+        ctx.fillStyle = "rgba(13,17,23,0.55)";
+        roundRect(ctx, x - w / 2, y - 30, w, 18, 9);
+        ctx.fill();
+        const c = COLORMAPS.temp(t);
+        ctx.fillStyle = `rgba(${c[0]|0},${c[1]|0},${c[2]|0},${layerState.temp.opacity})`;
+        ctx.fillText(label, x, y - 21);
+      }
+    }
+    // wind arrows, colour = speed, direction = where the wind is going
     if (layerState.wind.on) {
       for (let iy = 0; iy < NY; iy++) for (let ix = 0; ix < NX; ix++) {
         const loc = weatherData[iy * NX + ix];
         const spd = loc.hourly.wind_speed_10m[timeIdx];
         const dir = loc.hourly.wind_direction_10m[timeIdx];
         if (spd == null || dir == null) continue;
-        const p = this._map.latLngToLayerPoint([lats[iy], lons[ix]]);
-        const x = p.x - this._origin.x, y = p.y - this._origin.y;
+        const { x, y } = pt(iy, ix);
         if (x < -20 || y < -20 || x > this._w + 20 || y > this._h + 20) continue;
-        const rad = (dir + 180) * Math.PI / 180; // point where the wind is going
+        const rad = (dir + 180) * Math.PI / 180;
         const len = Math.min(7 + spd * 1.7, 36);
         const dx = Math.sin(rad) * len, dy = -Math.cos(rad) * len;
-        actx.strokeStyle = actx.fillStyle = "rgba(235,240,245,0.85)";
-        actx.lineWidth = 2;
-        actx.beginPath();
-        actx.moveTo(x - dx * 0.5, y - dy * 0.5);
-        actx.lineTo(x + dx * 0.5, y + dy * 0.5);
-        actx.stroke();
+        const c = COLORMAPS.wind(spd);
+        const a = 0.25 + 0.75 * layerState.wind.opacity;
+        ctx.strokeStyle = ctx.fillStyle = `rgba(${c[0]|0},${c[1]|0},${c[2]|0},${a})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x - dx * 0.5, y - dy * 0.5);
+        ctx.lineTo(x + dx * 0.5, y + dy * 0.5);
+        ctx.stroke();
         const tx = x + dx * 0.5, ty = y + dy * 0.5, s = 5;
         const ux = dx / len, uy = dy / len;
-        actx.beginPath();
-        actx.moveTo(tx, ty);
-        actx.lineTo(tx - ux * s - uy * s * 0.6, ty - uy * s + ux * s * 0.6);
-        actx.lineTo(tx - ux * s + uy * s * 0.6, ty - uy * s - ux * s * 0.6);
-        actx.closePath();
-        actx.fill();
+        ctx.beginPath();
+        ctx.moveTo(tx, ty);
+        ctx.lineTo(tx - ux * s - uy * s * 0.6, ty - uy * s + ux * s * 0.6);
+        ctx.lineTo(tx - ux * s + uy * s * 0.6, ty - uy * s - ux * s * 0.6);
+        ctx.closePath();
+        ctx.fill();
       }
     }
-    updateCityTemps();
   },
 });
 overlay = new WeatherOverlay();
@@ -246,7 +256,7 @@ async function loadData() {
   for (let iy = 0; iy < NY; iy++) for (let ix = 0; ix < NX; ix++) { latParam.push(lats[iy]); lonParam.push(lons[ix]); }
   const url = "https://api.open-meteo.com/v1/forecast"
     + "?latitude=" + latParam.join(",") + "&longitude=" + lonParam.join(",")
-    + "&hourly=temperature_2m,relative_humidity_2m,precipitation,cloud_cover,surface_pressure,wind_speed_10m,wind_direction_10m"
+    + "&hourly=temperature_2m,precipitation,wind_speed_10m,wind_direction_10m"
     + "&wind_speed_unit=ms&forecast_days=3&timezone=auto";
   const res = await fetch(url);
   if (!res.ok) throw new Error("Open-Meteo request failed: HTTP " + res.status);
@@ -303,8 +313,8 @@ function buildLegend() {
     for (let i = 0; i < n; i++) {
       const v = d.min + (d.max - d.min) * i / (n - 1);
       const c = COLORMAPS[d.id](v);
-      const a = c.length > 3 ? c[3] : ALPHA_DEFAULT[d.id];
-      cols.push(`rgba(${c[0]|0},${c[1]|0},${c[2]|0},${Math.max(a, 0.15)}) ${i / (n - 1) * 100}%`);
+      const a = c.length > 3 ? c[3] : 1;
+      cols.push(`rgba(${c[0]|0},${c[1]|0},${c[2]|0},${Math.max(a, 0.3)}) ${i / (n - 1) * 100}%`);
     }
     const item = document.createElement("div");
     item.className = "legend-item";

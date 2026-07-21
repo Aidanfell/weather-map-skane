@@ -8,17 +8,13 @@ Pure static site — no build step, no API key. Data: [Open-Meteo](https://open-
 ## Features
 
 - Leaflet map locked to the Skåne / Blekinge region (dark CARTO basemap)
-- Live forecast data from Open-Meteo on a 15×9 point grid over the region
-- Toggleable / opacity-adjustable layers:
-  - Cloud cover
-  - Precipitation (mm/h)
-  - Temperature
-  - Wind speed + animated direction arrows
-  - Air pressure
-  - Humidity
-- Time slider (72 h forecast) with play/pause animation
-- Hover anywhere on the map for exact interpolated values
-- Dynamic legend per active layer
+- Live 72 h forecast from Open-Meteo on a 15×9 point grid over the region
+- Three focused layers (toggle + opacity slider each):
+  - **Precipitation** — radar-style blobs (green → yellow → red), drawn only where it rains
+  - **Wind** — arrows: colour = speed, direction = where the wind is going
+  - **Temperature** — coloured numbers directly on the map
+- Time slider with play/pause animation (autoplays on load)
+- Hover anywhere for exact interpolated values; legend per active layer
 
 ## Run locally
 
