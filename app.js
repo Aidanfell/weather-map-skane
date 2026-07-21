@@ -99,6 +99,14 @@ buffer.width = BUFFER_W; buffer.height = BUFFER_H;
 const bctx = buffer.getContext("2d");
 const img = bctx.createImageData(BUFFER_W, BUFFER_H);
 
+let redrawQueued = false;
+let overlay = null;
+function requestRedraw() {
+  if (redrawQueued) return;
+  redrawQueued = true;
+  requestAnimationFrame(() => { redrawQueued = false; if (overlay) overlay.redraw(); });
+}
+
 const WeatherOverlay = L.Layer.extend({
   onAdd(m) {
     this._map = m;
@@ -190,15 +198,8 @@ const WeatherOverlay = L.Layer.extend({
     }
   },
 });
-const overlay = new WeatherOverlay();
+overlay = new WeatherOverlay();
 map.addLayer(overlay);
-
-let redrawQueued = false;
-function requestRedraw() {
-  if (redrawQueued) return;
-  redrawQueued = true;
-  requestAnimationFrame(() => { redrawQueued = false; overlay.redraw(); });
-}
 
 // bilinear sample of a variable at fractional grid coords
 function sample(varName, gx, gy) {
