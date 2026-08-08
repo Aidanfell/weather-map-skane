@@ -166,11 +166,19 @@ const map = L.map("map", {
 map.fitBounds([[LAND_BBOX.latMin, LAND_BBOX.lonMin], [LAND_BBOX.latMax, LAND_BBOX.lonMax]], { padding: [20, 20] });
 L.control.zoom({ position: "bottomright" }).addTo(map);
 
-// Clean dark base tiles (No foreign text label clutter)
+// Base dark map canvas
 L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png", {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a> | Data: Open-Meteo',
   subdomains: "abcd",
   maxZoom: 19,
+}).addTo(map);
+
+// Imprinted town, city, and geographic labels overlay
+L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png", {
+  subdomains: "abcd",
+  maxZoom: 19,
+  opacity: 0.85,
+  pane: "shadowPane", // Keep imprinted labels under city weather badges
 }).addTo(map);
 
 /* ---------- City Markers ---------- */
