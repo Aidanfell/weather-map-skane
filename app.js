@@ -1,19 +1,19 @@
-/* Skåne & Blekinge weather map — data: Open-Meteo (free, no key)
-   Three things only: incoming rain (radar blobs), wind (speed-coloured arrows),
-   temperature (coloured numbers). No background washes. */
+/* Skåne & Blekinge High-Precision Weather Radar & Forecast Engine
+   Data source: Open-Meteo High-Resolution Model (Free API)
+   Features: 36x24 grid resolution, doppler rain radar, cloud density overlay,
+             animated wind flow particles, city weather badges, timeline histogram. */
 "use strict";
 
-/* ---------- Region & grid ---------- */
+/* ---------- Region & High-Resolution Grid ---------- */
 const REGION = { latMin: 55.3, latMax: 56.75, lonMin: 12.2, lonMax: 16.3 };
-const NX = 15, NY = 9; // grid points: NX lon × NY lat
-const BUFFER_W = 240, BUFFER_H = 150; // offscreen interpolation buffer
+const NX = 36, NY = 24; // 864 grid points for pinpoint precision
+const BUFFER_W = 360, BUFFER_H = 240; // High-res offscreen interpolation buffer
 
 const lats = [], lons = [];
 for (let iy = 0; iy < NY; iy++) lats.push(REGION.latMin + (REGION.latMax - REGION.latMin) * iy / (NY - 1));
 for (let ix = 0; ix < NX; ix++) lons.push(REGION.lonMin + (REGION.lonMax - REGION.lonMin) * ix / (NX - 1));
 
-/* ---------- Land mask (clip overlays to the Skåne & Blekinge land outline) ---------- */
-// LAND_RINGS ([lon, lat] exterior rings) comes from land.js
+/* ---------- Land Mask Processing ---------- */
 const LAND_BBOX = { latMin: Infinity, latMax: -Infinity, lonMin: Infinity, lonMax: -Infinity };
 const RING_BBOX = LAND_RINGS.map(ring => {
   const b = { latMin: Infinity, latMax: -Infinity, lonMin: Infinity, lonMax: -Infinity };
@@ -42,7 +42,6 @@ function landPointInside(lon, lat) {
   return false;
 }
 
-// min distance (degrees) from a point to any ring edge — for coastal grid points
 function landDistDeg(lon, lat) {
   let best = Infinity;
   for (let r = 0; r < LAND_RINGS.length; r++) {
@@ -62,7 +61,6 @@ function landDistDeg(lon, lat) {
   return best;
 }
 
-// binary land mask over REGION, bilinearly sampled → soft coastline feather (~1 mask cell)
 const landMask = new Float32Array(BUFFER_W * BUFFER_H);
 for (let my = 0; my < BUFFER_H; my++) {
   const la = REGION.latMin + (REGION.latMax - REGION.latMin) * my / (BUFFER_H - 1);
@@ -71,6 +69,7 @@ for (let my = 0; my < BUFFER_H; my++) {
     landMask[my * BUFFER_W + mx] = landPointInside(lo, la) ? 1 : 0;
   }
 }
+
 function landFactor(lon, lat) {
   const gx = (lon - REGION.lonMin) / (REGION.lonMax - REGION.lonMin) * (BUFFER_W - 1);
   const gy = (lat - REGION.latMin) / (REGION.latMax - REGION.latMin) * (BUFFER_H - 1);
@@ -82,21 +81,19 @@ function landFactor(lon, lat) {
   return m00 * (1 - fx) * (1 - fy) + m10 * fx * (1 - fy) + m01 * (1 - fx) * fy + m11 * fx * fy;
 }
 
-// per grid point: near enough to land to show temp/wind? (coastal cities like
-// Helsingborg and Karlskrona sit on the shoreline/islands, so allow ~0.2° offshore)
 const gridOnLand = [];
 for (let iy = 0; iy < NY; iy++) for (let ix = 0; ix < NX; ix++)
-  gridOnLand.push(landPointInside(lons[ix], lats[iy]) || landDistDeg(lons[ix], lats[iy]) < 0.2);
+  gridOnLand.push(landPointInside(lons[ix], lats[iy]) || landDistDeg(lons[ix], lats[iy]) < 0.25);
 
-/* ---------- Layers ---------- */
-// kind: "field" = colour blob on the soft canvas · "arrows" = wind arrows · "labels" = temp numbers
+/* ---------- Layer Definitions ---------- */
 const LAYER_DEFS = [
-  { id: "temp",   name: "Temperature",   varName: "temperature_2m",   unit: "°C",   min: -10, max: 30, on: true, opacity: 1.0,  dot: "#f47067", kind: "labels" },
-  { id: "wind",   name: "Wind",          varName: "wind_speed_10m",   unit: "m/s",  min: 0,   max: 25, on: true, opacity: 1.0,  dot: "#7ee787", kind: "arrows" },
-  { id: "precip", name: "Precipitation", varName: "precipitation",    unit: "mm/h", min: 0,   max: 15, on: true, opacity: 0.9,  dot: "#58a6ff", kind: "field"  },
+  { id: "precip", name: "Rain Radar",   varName: "precipitation",    unit: "mm/h", min: 0,   max: 15, on: true,  opacity: 0.9, dot: "#38bdf8" },
+  { id: "clouds", name: "Cloud Cover",  varName: "cloud_cover",      unit: "%",    min: 0,   max: 100,on: false, opacity: 0.7, dot: "#cbd5e1" },
+  { id: "wind",   name: "Wind Flow",    varName: "wind_speed_10m",   unit: "m/s",  min: 0,   max: 25, on: false, opacity: 0.9, dot: "#4ade80" },
+  { id: "temp",   name: "Temperature",  varName: "temperature_2m",   unit: "°C",   min: -10, max: 30, on: false, opacity: 0.7, dot: "#fb923c" },
 ];
 
-/* ---------- Colour scales ---------- */
+/* ---------- Color Palettes & Interpolation ---------- */
 function stops(stopsArr, v) {
   if (v <= stopsArr[0][0]) return stopsArr[0].slice(1);
   const last = stopsArr[stopsArr.length - 1];
@@ -110,57 +107,111 @@ function stops(stopsArr, v) {
   }
   return last.slice(1);
 }
+
 const COLORMAPS = {
-  temp: v => stops([[-10,80,140,255],[0,110,200,230],[10,120,210,150],[18,255,230,110],[24,255,160,60],[30,235,60,60]], v),
-  wind: v => stops([[0,140,220,160],[6,120,200,255],[12,255,230,110],[18,255,150,50],[25,235,60,60]], v),
-  // radar-style: green = light rain, yellow/orange = moderate, red/purple = heavy
   precip: v => {
     if (v < 0.05) return [0, 0, 0, 0];
-    const c = stops([[0.1,70,200,120],[1,120,220,90],[3,250,235,80],[6,250,160,50],[10,235,60,60],[15,190,70,210]], Math.max(v, 0.1));
-    return [c[0], c[1], c[2], Math.min(0.5 + v / 15 * 0.45, 0.95)];
+    const c = stops([
+      [0.1, 45, 212, 191],   // Light drizzle teal
+      [1.0, 59, 130, 246],   // Moderate rain blue
+      [3.0, 250, 204, 21],   // Downpour yellow
+      [6.0, 249, 115, 22],   // Heavy rain orange
+      [10.0, 239, 68, 68],   // Severe storm red
+      [15.0, 192, 132, 252]  // Torrential purple
+    ], Math.max(v, 0.1));
+    return [c[0], c[1], c[2], Math.min(0.55 + (v / 15) * 0.4, 0.95)];
   },
+  clouds: v => {
+    if (v < 5) return [0, 0, 0, 0];
+    const alpha = (v / 100) * 0.75;
+    return [226, 232, 240, alpha];
+  },
+  wind: v => stops([
+    [0, 56, 189, 248],
+    [6, 74, 222, 128],
+    [12, 250, 204, 21],
+    [18, 251, 146, 60],
+    [25, 239, 68, 68]
+  ], v),
+  temp: v => stops([
+    [-10, 30, 58, 138],
+    [0, 14, 165, 233],
+    [10, 45, 212, 191],
+    [18, 250, 204, 21],
+    [24, 249, 115, 22],
+    [30, 225, 29, 72]
+  ], v),
 };
 
-/* ---------- State ---------- */
-let weatherData = null;   // array of per-point responses
+/* ---------- Application State ---------- */
+let weatherData = null;
 let times = [];
 let timeIdx = 0;
 let playing = false;
 let playTimer = null;
+let playSpeed = 1; // 1x, 2x, 4x
+let activeQuickLayer = "precip";
 const layerState = {};
 LAYER_DEFS.forEach(d => layerState[d.id] = { on: d.on, opacity: d.opacity });
 
-/* ---------- Map ---------- */
+/* ---------- Leaflet Map Setup ---------- */
 const map = L.map("map", {
   minZoom: 7,
   maxZoom: 12,
   maxBounds: [[REGION.latMin - 0.6, REGION.lonMin - 1.2], [REGION.latMax + 0.6, REGION.lonMax + 1.2]],
-  maxBoundsViscosity: 0.8,
+  maxBoundsViscosity: 0.85,
   zoomControl: false,
 });
-// open with the land area filling the view
-map.fitBounds([[LAND_BBOX.latMin, LAND_BBOX.lonMin], [LAND_BBOX.latMax, LAND_BBOX.lonMax]], { padding: [16, 16] });
+
+map.fitBounds([[LAND_BBOX.latMin, LAND_BBOX.lonMin], [LAND_BBOX.latMax, LAND_BBOX.lonMax]], { padding: [20, 20] });
 L.control.zoom({ position: "bottomright" }).addTo(map);
-L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+
+// Clean dark base tiles (No foreign text label clutter)
+L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png", {
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a> | Data: Open-Meteo',
   subdomains: "abcd",
   maxZoom: 19,
 }).addTo(map);
 
-// city names for orientation
+/* ---------- City Markers ---------- */
 const CITIES = [
   ["Malmö", 55.605, 13.003], ["Lund", 55.7047, 13.191], ["Helsingborg", 56.0465, 12.6945],
   ["Kristianstad", 56.0313, 14.1567], ["Hässleholm", 56.1589, 13.7664], ["Ystad", 55.4295, 13.82],
   ["Karlskrona", 56.1612, 15.5869], ["Ronneby", 56.21, 15.276], ["Karlshamn", 56.1706, 14.8619],
   ["Sölvesborg", 56.0521, 14.5753],
 ];
-CITIES.forEach(([name, la, lo]) =>
-  L.marker([la, lo], {
-    interactive: false, keyboard: false,
-    icon: L.divIcon({ className: "city-label", html: name, iconSize: [0, 0] }),
-  }).addTo(map));
 
-/* ---------- Canvas overlays ---------- */
+const cityMarkerInstances = [];
+
+function initCityMarkers() {
+  CITIES.forEach(([name, la, lo]) => {
+    const icon = L.divIcon({
+      className: "city-marker-wrap",
+      html: `<div class="city-badge" data-name="${name}">` +
+            `<span class="name">${name}</span><span class="temp" id="city-temp-${name.replace(/\s+/g, '')}">–°</span>` +
+            `</div>`,
+      iconSize: [0, 0],
+    });
+    const marker = L.marker([la, lo], { icon }).addTo(map);
+    marker.on("click", () => inspectPoint({ lat: la, lng: lo }, name));
+    cityMarkerInstances.push({ name, la, lo });
+  });
+}
+
+function updateCityBadges() {
+  if (!weatherData) return;
+  cityMarkerInstances.forEach(({ name, la, lo }) => {
+    const gx = (lo - REGION.lonMin) / (REGION.lonMax - REGION.lonMin) * (NX - 1);
+    const gy = (la - REGION.latMin) / (REGION.latMax - REGION.latMin) * (NY - 1);
+    const t = sample("temperature_2m", gx, gy);
+    const el = document.getElementById(`city-temp-${name.replace(/\s+/g, '')}`);
+    if (el && t != null) {
+      el.textContent = Math.round(t) + "°";
+    }
+  });
+}
+
+/* ---------- Canvas Overlays & Particle Animation Engine ---------- */
 const buffer = document.createElement("canvas");
 buffer.width = BUFFER_W; buffer.height = BUFFER_H;
 const bctx = buffer.getContext("2d");
@@ -168,20 +219,23 @@ const img = bctx.createImageData(BUFFER_W, BUFFER_H);
 
 let redrawQueued = false;
 let overlay = null;
+
 function requestRedraw() {
   if (redrawQueued) return;
   redrawQueued = true;
   requestAnimationFrame(() => { redrawQueued = false; if (overlay) overlay.redraw(); });
 }
 
-function roundRect(ctx, x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
+// Particle Streamlines Engine for Wind Flow
+const PARTICLE_COUNT = 400;
+const particles = [];
+for (let i = 0; i < PARTICLE_COUNT; i++) {
+  particles.push({
+    x: Math.random() * (REGION.lonMax - REGION.lonMin) + REGION.lonMin,
+    y: Math.random() * (REGION.latMax - REGION.latMin) + REGION.latMin,
+    age: Math.floor(Math.random() * 60),
+    maxAge: 40 + Math.random() * 40,
+  });
 }
 
 const WeatherOverlay = L.Layer.extend({
@@ -194,12 +248,29 @@ const WeatherOverlay = L.Layer.extend({
     pane.appendChild(this._marks);
     this._resetBound = this._reset.bind(this);
     m.on("moveend zoomend resize", this._resetBound);
+    this._startAnimLoop();
     this._reset();
   },
   onRemove(m) {
+    this._stopAnimLoop();
     m.off("moveend zoomend resize", this._resetBound);
     L.DomUtil.remove(this._colors);
     L.DomUtil.remove(this._marks);
+  },
+  _startAnimLoop() {
+    this._animating = true;
+    const step = () => {
+      if (!this._animating) return;
+      if (layerState.wind.on && weatherData) {
+        this._drawWindParticles();
+      }
+      this._animReq = requestAnimationFrame(step);
+    };
+    step();
+  },
+  _stopAnimLoop() {
+    this._animating = false;
+    if (this._animReq) cancelAnimationFrame(this._animReq);
   },
   _reset() {
     const size = this._map.getSize();
@@ -214,154 +285,207 @@ const WeatherOverlay = L.Layer.extend({
   },
   redraw() {
     if (!weatherData) return;
-    this._drawRain();
-    this._drawMarks();
+    this._drawRasterFields();
+    if (!layerState.wind.on) {
+      const ctx = this._marks.getContext("2d");
+      ctx.clearRect(0, 0, this._w, this._h);
+    }
   },
-  // rain blobs only — nothing is drawn where it doesn't rain
-  _drawRain() {
+  _drawRasterFields() {
     const px = img.data;
-    const on = layerState.precip.on && layerState.precip.opacity > 0;
-    const alpha = layerState.precip.opacity;
+    const activeLayer = LAYER_DEFS.find(d => d.id === activeQuickLayer) || LAYER_DEFS[0];
+    const isTempMode = activeQuickLayer === "temp";
+    const isCloudMode = activeQuickLayer === "clouds";
+    const isPrecipMode = activeQuickLayer === "precip";
+
+    const on = layerState[activeLayer.id].on && layerState[activeLayer.id].opacity > 0;
+    const alpha = layerState[activeLayer.id].opacity;
+
     for (let by = 0; by < BUFFER_H; by++) {
       for (let bx = 0; bx < BUFFER_W; bx++) {
         const o = (by * BUFFER_W + bx) * 4;
         if (!on) { px[o + 3] = 0; continue; }
+
         const lp = L.point(this._origin.x + (bx + 0.5) / BUFFER_W * this._w,
                            this._origin.y + (by + 0.5) / BUFFER_H * this._h);
         const ll = this._map.layerPointToLatLng(lp);
         const f = landFactor(ll.lng, ll.lat);
-        if (f <= 0.01) { px[o + 3] = 0; continue; }
+
+        if (f <= 0.005) { px[o + 3] = 0; continue; }
+
         const gx = (ll.lng - REGION.lonMin) / (REGION.lonMax - REGION.lonMin) * (NX - 1);
         const gy = (ll.lat - REGION.latMin) / (REGION.latMax - REGION.latMin) * (NY - 1);
-        const v = sample("precipitation", Math.min(Math.max(gx, 0), NX - 1), Math.min(Math.max(gy, 0), NY - 1));
+
+        let v = null;
+        if (isPrecipMode) v = sample("precipitation", gx, gy);
+        else if (isCloudMode) v = sample("cloud_cover", gx, gy);
+        else if (isTempMode) v = sample("temperature_2m", gx, gy);
+
         if (v == null || isNaN(v)) { px[o + 3] = 0; continue; }
-        const c = COLORMAPS.precip(v);
+
+        const c = COLORMAPS[activeLayer.id](v);
         const a = c[3] * alpha * f;
-        if (a > 0.001) { px[o] = c[0]; px[o + 1] = c[1]; px[o + 2] = c[2]; px[o + 3] = a * 255; }
-        else px[o + 3] = 0;
+
+        if (a > 0.001) {
+          px[o] = c[0]; px[o + 1] = c[1]; px[o + 2] = c[2]; px[o + 3] = a * 255;
+        } else px[o + 3] = 0;
       }
     }
+
     bctx.putImageData(img, 0, 0);
     const ctx = this._colors.getContext("2d");
     ctx.clearRect(0, 0, this._w, this._h);
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(buffer, 0, 0, this._w, this._h);
   },
-  // crisp canvas: temperature numbers + wind arrows
-  _drawMarks() {
+  _drawWindParticles() {
     const ctx = this._marks.getContext("2d");
-    ctx.clearRect(0, 0, this._w, this._h);
-    const pt = (iy, ix) => {
-      const p = this._map.latLngToLayerPoint([lats[iy], lons[ix]]);
-      return { x: p.x - this._origin.x, y: p.y - this._origin.y };
-    };
-    // temperature numbers on every other grid point
-    if (layerState.temp.on) {
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.font = "600 13px 'Segoe UI', system-ui, sans-serif";
-      for (let iy = 0; iy < NY; iy += 2) for (let ix = 0; ix < NX; ix += 2) {
-        if (!gridOnLand[iy * NX + ix]) continue;
-        const t = weatherData[iy * NX + ix].hourly.temperature_2m[timeIdx];
-        if (t == null) continue;
-        const { x, y } = pt(iy, ix);
-        if (x < -20 || y < -20 || x > this._w + 20 || y > this._h + 20) continue;
-        const label = Math.round(t) + "°";
-        const w = ctx.measureText(label).width + 12;
-        ctx.fillStyle = "rgba(13,17,23,0.55)";
-        roundRect(ctx, x - w / 2, y - 30, w, 18, 9);
-        ctx.fill();
-        const c = COLORMAPS.temp(t);
-        ctx.fillStyle = `rgba(${c[0]|0},${c[1]|0},${c[2]|0},${layerState.temp.opacity})`;
-        ctx.fillText(label, x, y - 21);
+    ctx.fillStyle = "rgba(9, 13, 22, 0.15)";
+    ctx.fillRect(0, 0, this._w, this._h);
+
+    const opacity = layerState.wind.opacity;
+
+    particles.forEach(p => {
+      p.age++;
+      if (p.age > p.maxAge || p.x < REGION.lonMin || p.x > REGION.lonMax || p.y < REGION.latMin || p.y > REGION.latMax) {
+        p.x = Math.random() * (REGION.lonMax - REGION.lonMin) + REGION.lonMin;
+        p.y = Math.random() * (REGION.latMax - REGION.latMin) + REGION.latMin;
+        p.age = 0;
+        return;
       }
-    }
-    // wind arrows, colour = speed, direction = where the wind is going
-    if (layerState.wind.on) {
-      for (let iy = 0; iy < NY; iy++) for (let ix = 0; ix < NX; ix++) {
-        if (!gridOnLand[iy * NX + ix]) continue;
-        const loc = weatherData[iy * NX + ix];
-        const spd = loc.hourly.wind_speed_10m[timeIdx];
-        const dir = loc.hourly.wind_direction_10m[timeIdx];
-        if (spd == null || dir == null) continue;
-        const { x, y } = pt(iy, ix);
-        if (x < -20 || y < -20 || x > this._w + 20 || y > this._h + 20) continue;
-        const rad = (dir + 180) * Math.PI / 180;
-        const len = Math.min(7 + spd * 1.7, 36);
-        const dx = Math.sin(rad) * len, dy = -Math.cos(rad) * len;
-        const c = COLORMAPS.wind(spd);
-        const a = 0.25 + 0.75 * layerState.wind.opacity;
-        ctx.strokeStyle = ctx.fillStyle = `rgba(${c[0]|0},${c[1]|0},${c[2]|0},${a})`;
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(x - dx * 0.5, y - dy * 0.5);
-        ctx.lineTo(x + dx * 0.5, y + dy * 0.5);
-        ctx.stroke();
-        const tx = x + dx * 0.5, ty = y + dy * 0.5, s = 5;
-        const ux = dx / len, uy = dy / len;
-        ctx.beginPath();
-        ctx.moveTo(tx, ty);
-        ctx.lineTo(tx - ux * s - uy * s * 0.6, ty - uy * s + ux * s * 0.6);
-        ctx.lineTo(tx - ux * s + uy * s * 0.6, ty - uy * s - ux * s * 0.6);
-        ctx.closePath();
-        ctx.fill();
-      }
-    }
+
+      const gx = (p.x - REGION.lonMin) / (REGION.lonMax - REGION.lonMin) * (NX - 1);
+      const gy = (p.y - REGION.latMin) / (REGION.latMax - REGION.latMin) * (NY - 1);
+
+      const spd = sample("wind_speed_10m", gx, gy);
+      const dir = sample("wind_direction_10m", gx, gy);
+
+      if (spd == null || dir == null) return;
+
+      const rad = (dir + 180) * Math.PI / 180;
+      const stepDeg = Math.min(0.008 + (spd * 0.003), 0.035);
+
+      const oldPt = this._map.latLngToLayerPoint([p.y, p.x]);
+      p.x += Math.sin(rad) * stepDeg;
+      p.y += -Math.cos(rad) * stepDeg;
+      const newPt = this._map.latLngToLayerPoint([p.y, p.x]);
+
+      const ox = oldPt.x - this._origin.x, oy = oldPt.y - this._origin.y;
+      const nx = newPt.x - this._origin.x, ny = newPt.y - this._origin.y;
+
+      if (ox < -10 || oy < -10 || ox > this._w + 10 || oy > this._h + 10) return;
+
+      const c = COLORMAPS.wind(spd);
+      const lifeFade = 1 - Math.abs((p.age / p.maxAge) - 0.5) * 2;
+      ctx.strokeStyle = `rgba(${c[0]|0},${c[1]|0},${c[2]|0},${lifeFade * opacity * 0.85})`;
+      ctx.lineWidth = Math.min(1.2 + spd * 0.12, 3.5);
+      ctx.beginPath();
+      ctx.moveTo(ox, oy);
+      ctx.lineTo(nx, ny);
+      ctx.stroke();
+    });
   },
 });
+
 overlay = new WeatherOverlay();
 map.addLayer(overlay);
 
-// bilinear sample of a variable at fractional grid coords
+/* ---------- Bilinear Field Sampler ---------- */
 function sample(varName, gx, gy) {
-  const x0 = Math.min(Math.floor(gx), NX - 2), y0 = Math.min(Math.floor(gy), NY - 2);
-  const fx = gx - x0, fy = gy - y0;
-  const h = i => weatherData[i].hourly[varName][timeIdx];
-  const v00 = h(y0 * NX + x0), v10 = h(y0 * NX + x0 + 1);
-  const v01 = h((y0 + 1) * NX + x0), v11 = h((y0 + 1) * NX + x0 + 1);
-  if (v00 == null || v10 == null || v01 == null || v11 == null) return null;
-  return v00 * (1 - fx) * (1 - fy) + v10 * fx * (1 - fy) + v01 * (1 - fx) * fy + v11 * fx * fy;
+  if (!weatherData) return null;
+  const x0 = Math.min(Math.max(Math.floor(gx), 0), NX - 2);
+  const y0 = Math.min(Math.max(Math.floor(gy), 0), NY - 2);
+  const fx = Math.min(Math.max(gx - x0, 0), 1);
+  const fy = Math.min(Math.max(gy - y0, 0), 1);
+
+  const getH = idx => {
+    const pt = weatherData[idx];
+    return (pt && pt.hourly && pt.hourly[varName]) ? pt.hourly[varName][timeIdx] : null;
+  };
+
+  const v00 = getH(y0 * NX + x0), v10 = getH(y0 * NX + x0 + 1);
+  const v01 = getH((y0 + 1) * NX + x0), v11 = getH((y0 + 1) * NX + x0 + 1);
+
+  if (v00 == null || v10 == null || v01 == null || v11 == null) return v00;
+  return v00 * (1 - fx) * (1 - fy) + v10 * fx * (1 - fy) + v01 * (1 - fx) * gy + v11 * fx * fy;
 }
 
-/* ---------- Data fetch ---------- */
+/* ---------- Data Ingestion & Open-Meteo Query ---------- */
 async function loadData() {
   const latParam = [], lonParam = [];
-  for (let iy = 0; iy < NY; iy++) for (let ix = 0; ix < NX; ix++) { latParam.push(lats[iy]); lonParam.push(lons[ix]); }
+  for (let iy = 0; iy < NY; iy++) for (let ix = 0; ix < NX; ix++) {
+    latParam.push(lats[iy].toFixed(4));
+    lonParam.push(lons[ix].toFixed(4));
+  }
+
   const url = "https://api.open-meteo.com/v1/forecast"
     + "?latitude=" + latParam.join(",") + "&longitude=" + lonParam.join(",")
-    + "&hourly=temperature_2m,precipitation,wind_speed_10m,wind_direction_10m"
+    + "&hourly=temperature_2m,precipitation,rain,showers,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,wind_speed_10m,wind_direction_10m,weather_code,relative_humidity_2m"
     + "&wind_speed_unit=ms&forecast_days=6&timezone=auto";
+
   const res = await fetch(url);
-  if (!res.ok) throw new Error("Open-Meteo request failed: HTTP " + res.status);
+  if (!res.ok) throw new Error("HTTP " + res.status);
   const json = await res.json();
   weatherData = Array.isArray(json) ? json : [json];
   times = weatherData[0].hourly.time;
-  // start at the hour closest to now
+
   const now = Date.now();
   let best = 0;
   times.forEach((t, i) => { if (Math.abs(new Date(t) - now) < Math.abs(new Date(times[best]) - now)) best = i; });
   timeIdx = best;
+
   const slider = document.getElementById("time-slider");
   slider.max = times.length - 1;
   slider.value = timeIdx;
+
+  initCityMarkers();
+  updateCityBadges();
   updateTimeLabel();
+  renderDayTabs();
+  renderPrecipHistogram();
+  
   document.getElementById("loading").style.display = "none";
   requestRedraw();
   buildLegend();
+
+  // Inspect center of Skåne by default
+  inspectPoint({ lat: 55.95, lng: 13.55 }, "Skåne Central");
 }
 
-/* ---------- UI: layer panel ---------- */
+/* ---------- UI: Quick Layer Switcher & Settings ---------- */
+function initQuickLayers() {
+  document.querySelectorAll(".layer-pill").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".layer-pill").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      activeQuickLayer = btn.dataset.layer;
+
+      // Turn on quick-selected layer & off others for crisp focus
+      LAYER_DEFS.forEach(d => {
+        layerState[d.id].on = (d.id === activeQuickLayer);
+        const cb = document.getElementById(`cb-${d.id}`);
+        if (cb) cb.checked = layerState[d.id].on;
+      });
+
+      requestRedraw();
+      buildLegend();
+    });
+  });
+}
+
 function buildLayerPanel() {
   const wrap = document.getElementById("layer-rows");
+  wrap.innerHTML = "";
   LAYER_DEFS.forEach(d => {
     const row = document.createElement("div");
     row.className = "layer-row";
     row.innerHTML =
       `<span class="dot" style="background:${d.dot}"></span>` +
-      `<input type="checkbox" id="cb-${d.id}" ${d.on ? "checked" : ""}>` +
+      `<input type="checkbox" id="cb-${d.id}" ${layerState[d.id].on ? "checked" : ""}>` +
       `<label for="cb-${d.id}">${d.name}</label>` +
-      `<input type="range" id="op-${d.id}" min="0" max="100" value="${Math.round(d.opacity * 100)}" title="Opacity">`;
+      `<input type="range" id="op-${d.id}" min="0" max="100" value="${Math.round(layerState[d.id].opacity * 100)}" title="Opacity">`;
     wrap.appendChild(row);
+
     row.querySelector(`#cb-${d.id}`).addEventListener("change", e => {
       layerState[d.id].on = e.target.checked;
       requestRedraw(); buildLegend();
@@ -371,22 +495,26 @@ function buildLayerPanel() {
       requestRedraw();
     });
   });
+
+  const header = document.getElementById("toggle-layer-panel");
+  header.addEventListener("click", () => {
+    document.getElementById("layer-panel").classList.toggle("collapsed");
+  });
 }
 
-/* ---------- UI: legend ---------- */
 function buildLegend() {
   const el = document.getElementById("legend");
   const active = LAYER_DEFS.filter(d => layerState[d.id].on);
   if (!active.length) { el.style.display = "none"; return; }
   el.style.display = "block";
-  el.innerHTML = "<h2>Legend</h2>";
+  el.innerHTML = "";
   active.forEach(d => {
-    const n = 7, cols = [];
+    const n = 6, cols = [];
     for (let i = 0; i < n; i++) {
       const v = d.min + (d.max - d.min) * i / (n - 1);
       const c = COLORMAPS[d.id](v);
       const a = c.length > 3 ? c[3] : 1;
-      cols.push(`rgba(${c[0]|0},${c[1]|0},${c[2]|0},${Math.max(a, 0.3)}) ${i / (n - 1) * 100}%`);
+      cols.push(`rgba(${c[0]|0},${c[1]|0},${c[2]|0},${Math.max(a, 0.4)}) ${i / (n - 1) * 100}%`);
     }
     const item = document.createElement("div");
     item.className = "legend-item";
@@ -397,79 +525,226 @@ function buildLegend() {
   });
 }
 
-/* ---------- UI: time ---------- */
+/* ---------- UI: Weather Inspector Card ---------- */
+const readoutBody = document.getElementById("readout-body");
+
+function getWeatherCondition(code, precip) {
+  if (precip > 5.0) return { title: "Heavy Downpour", icon: "⛈️" };
+  if (precip > 0.5) return { title: "Rain Shower", icon: "🌧️" };
+  if (precip > 0.05) return { title: "Light Drizzle", icon: "🌦️" };
+  if (code === 0) return { title: "Clear Sky", icon: "☀️" };
+  if (code <= 3) return { title: "Partly Cloudy", icon: "⛅" };
+  if (code <= 48) return { title: "Foggy / Mist", icon: "🌫️" };
+  if (code <= 67) return { title: "Rain", icon: "🌧️" };
+  if (code <= 77) return { title: "Snowfall", icon: "❄️" };
+  return { title: "Overcast", icon: "☁️" };
+}
+
+function getWindCardinal(deg) {
+  const dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  return dirs[Math.round(deg / 45) % 8];
+}
+
+function inspectPoint(latlng, customTitle) {
+  if (!weatherData) return;
+  const gx = (latlng.lng - REGION.lonMin) / (REGION.lonMax - REGION.lonMin) * (NX - 1);
+  const gy = (latlng.lat - REGION.latMin) / (REGION.latMax - REGION.latMin) * (NY - 1);
+
+  if (gx < 0 || gy < 0 || gx > NX - 1 || gy > NY - 1) {
+    readoutBody.innerHTML = `<div class="inspect-placeholder">Outside forecast area</div>`;
+    return;
+  }
+
+  const temp = sample("temperature_2m", gx, gy);
+  const precip = sample("precipitation", gx, gy);
+  const clouds = sample("cloud_cover", gx, gy);
+  const windSpd = sample("wind_speed_10m", gx, gy);
+  const windDir = sample("wind_direction_10m", gx, gy);
+  const humidity = sample("relative_humidity_2m", gx, gy);
+  const code = sample("weather_code", gx, gy);
+
+  const cond = getWeatherCondition(Math.round(code || 0), precip || 0);
+
+  document.getElementById("readout-location").textContent = customTitle || `${latlng.lat.toFixed(2)}°N, ${latlng.lng.toFixed(2)}°E`;
+  document.getElementById("readout-time").textContent = fmtShortTime(times[timeIdx]);
+
+  readoutBody.innerHTML = `
+    <div class="readout-grid">
+      <div class="readout-card full-width">
+        <div>
+          <div class="label">${cond.title}</div>
+          <div class="val highlight">${temp != null ? temp.toFixed(1) + "°C" : "–"}</div>
+        </div>
+        <div style="font-size: 26px;">${cond.icon}</div>
+      </div>
+      <div class="readout-card">
+        <span class="label">Rain Rate</span>
+        <span class="val">${precip != null ? precip.toFixed(1) + " mm/h" : "0 mm/h"}</span>
+      </div>
+      <div class="readout-card">
+        <span class="label">Cloud Cover</span>
+        <span class="val">${clouds != null ? Math.round(clouds) + "%" : "–"}</span>
+      </div>
+      <div class="readout-card">
+        <span class="label">Wind Speed</span>
+        <span class="val">${windSpd != null ? windSpd.toFixed(1) + " m/s" : "–"} ${windDir != null ? getWindCardinal(windDir) : ""}</span>
+      </div>
+      <div class="readout-card">
+        <span class="label">Humidity</span>
+        <span class="val">${humidity != null ? Math.round(humidity) + "%" : "–"}</span>
+      </div>
+    </div>
+  `;
+}
+
+let inspectMarker = null;
+map.on("click", e => {
+  if (!inspectMarker) {
+    inspectMarker = L.circleMarker(e.latlng, {
+      radius: 6, color: "#38bdf8", weight: 2.5, fillColor: "#0284c7", fillOpacity: 0.8, interactive: false,
+    }).addTo(map);
+  } else inspectMarker.setLatLng(e.latlng);
+  inspectPoint(e.latlng);
+});
+
+map.on("mousemove", e => {
+  if (!inspectMarker) inspectPoint(e.latlng);
+});
+
+/* ---------- UI: Timeline Scrubber & Day Tabs ---------- */
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
 function fmtTime(t) {
   const d = new Date(t);
   return `${DAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]}, ${String(d.getHours()).padStart(2, "0")}:00`;
 }
+
+function fmtShortTime(t) {
+  const d = new Date(t);
+  return `${DAYS[d.getDay()]} ${String(d.getHours()).padStart(2, "0")}:00`;
+}
+
 function updateTimeLabel() {
   document.getElementById("time-label").textContent = times.length ? fmtTime(times[timeIdx]) : "–";
+  updateCityBadges();
 }
+
+function renderDayTabs() {
+  const wrap = document.getElementById("day-selector");
+  wrap.innerHTML = "";
+  const dayIndices = [];
+
+  times.forEach((t, i) => {
+    const d = new Date(t);
+    if (d.getHours() === 12 || i === 0) {
+      const dayKey = `${DAYS[d.getDay()]} ${d.getDate()}`;
+      if (!dayIndices.some(item => item.key === dayKey)) {
+        dayIndices.push({ key: dayKey, index: i });
+      }
+    }
+  });
+
+  dayIndices.forEach(({ key, index }) => {
+    const btn = document.createElement("button");
+    btn.className = "day-tab";
+    btn.textContent = key;
+    btn.addEventListener("click", () => {
+      timeIdx = index;
+      document.getElementById("time-slider").value = timeIdx;
+      updateTimeLabel();
+      requestRedraw();
+      updateDayTabHighlight();
+    });
+    wrap.appendChild(btn);
+  });
+
+  updateDayTabHighlight();
+}
+
+function updateDayTabHighlight() {
+  if (!times[timeIdx]) return;
+  const currentDayKey = `${DAYS[new Date(times[timeIdx]).getDay()]} ${new Date(times[timeIdx]).getDate()}`;
+  document.querySelectorAll(".day-tab").forEach(tab => {
+    tab.classList.toggle("active", tab.textContent === currentDayKey);
+  });
+}
+
+function renderPrecipHistogram() {
+  const canvas = document.getElementById("precip-histogram");
+  if (!canvas || !weatherData) return;
+  const ctx = canvas.getContext("2d");
+  const w = canvas.offsetWidth || 500;
+  const h = 28;
+  canvas.width = w; canvas.height = h;
+
+  ctx.clearRect(0, 0, w, h);
+
+  const hourlyMaxPrecip = times.map((_, tIdx) => {
+    let maxV = 0;
+    for (let i = 0; i < weatherData.length; i += 4) {
+      const v = weatherData[i].hourly.precipitation[tIdx];
+      if (v > maxV) maxV = v;
+    }
+    return maxV;
+  });
+
+  const barW = w / times.length;
+  hourlyMaxPrecip.forEach((v, i) => {
+    if (v > 0.05) {
+      const barH = Math.min((v / 8) * h, h);
+      ctx.fillStyle = v > 3 ? "rgba(249, 115, 22, 0.75)" : "rgba(56, 189, 248, 0.75)";
+      ctx.fillRect(i * barW, h - barH, Math.max(barW - 1, 1), barH);
+    }
+  });
+}
+
 document.getElementById("time-slider").addEventListener("input", e => {
   timeIdx = +e.target.value;
   updateTimeLabel();
+  updateDayTabHighlight();
   requestRedraw();
 });
+
 const playBtn = document.getElementById("play-btn");
+const playIcon = document.getElementById("play-icon");
+const pauseIcon = document.getElementById("pause-icon");
+
 function setPlaying(on) {
   playing = on;
-  playBtn.textContent = playing ? "❚❚" : "▶";
+  playIcon.style.display = playing ? "none" : "block";
+  pauseIcon.style.display = playing ? "block" : "none";
+
   if (playing) {
     clearInterval(playTimer);
     playTimer = setInterval(() => {
       timeIdx = (timeIdx + 1) % times.length;
       document.getElementById("time-slider").value = timeIdx;
       updateTimeLabel();
+      updateDayTabHighlight();
       requestRedraw();
-    }, 600);
+    }, 600 / playSpeed);
   } else clearInterval(playTimer);
 }
+
 playBtn.addEventListener("click", () => setPlaying(!playing));
 
-/* ---------- UI: readout (hover on desktop, tap on mobile) ---------- */
-const readoutBody = document.getElementById("readout-body");
-function showReadout(latlng) {
-  if (!weatherData) return;
-  const gx = (latlng.lng - REGION.lonMin) / (REGION.lonMax - REGION.lonMin) * (NX - 1);
-  const gy = (latlng.lat - REGION.latMin) / (REGION.latMax - REGION.latMin) * (NY - 1);
-  if (gx < 0 || gy < 0 || gx > NX - 1 || gy > NY - 1) { readoutBody.textContent = "Outside region"; return; }
-  let html = "";
-  LAYER_DEFS.forEach(d => {
-    const v = sample(d.varName, gx, gy);
-    if (v != null) html += `<div><span>${d.name}</span><span>${v.toFixed(1)} ${d.unit}</span></div>`;
-  });
-  readoutBody.innerHTML = html;
-}
-let readoutQueued = false;
-map.on("mousemove", e => {
-  if (readoutQueued) return;
-  readoutQueued = true;
-  requestAnimationFrame(() => { readoutQueued = false; showReadout(e.latlng); });
-});
-// touch support: tap a point to inspect it
-let inspectMarker = null;
-map.on("click", e => {
-  showReadout(e.latlng);
-  if (!inspectMarker) {
-    inspectMarker = L.circleMarker(e.latlng, {
-      radius: 7, color: "#79c0ff", weight: 2, fill: false, interactive: false,
-    }).addTo(map);
-  } else inspectMarker.setLatLng(e.latlng);
+const speedBtn = document.getElementById("speed-btn");
+speedBtn.addEventListener("click", () => {
+  if (playSpeed === 1) playSpeed = 2;
+  else if (playSpeed === 2) playSpeed = 4;
+  else playSpeed = 1;
+  speedBtn.textContent = playSpeed + "x";
+  if (playing) setPlaying(true);
 });
 
-/* ---------- UI: collapsible layer panel ---------- */
-const layerPanel = document.getElementById("layer-panel");
-layerPanel.querySelector("h2").addEventListener("click", () => layerPanel.classList.toggle("collapsed"));
-if (window.innerWidth <= 640) layerPanel.classList.add("collapsed");
-
-/* ---------- Go ---------- */
+/* ---------- Initialization ---------- */
+initQuickLayers();
 buildLayerPanel();
 buildLegend();
 loadData().catch(err => {
   document.getElementById("loading").style.display = "none";
   const banner = document.getElementById("error-banner");
   banner.hidden = false;
-  banner.textContent = "Could not load weather data: " + err.message + " — check your internet connection and reload.";
+  banner.textContent = "Could not load weather data: " + err.message + " — check connection and reload.";
 });
