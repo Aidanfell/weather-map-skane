@@ -184,6 +184,7 @@ const CITIES = [
 const cityMarkerInstances = [];
 
 function initCityMarkers() {
+  if (cityMarkerInstances.length > 0) return;
   CITIES.forEach(([name, la, lo]) => {
     const icon = L.divIcon({
       className: "city-marker-wrap",
@@ -284,7 +285,7 @@ const WeatherOverlay = L.Layer.extend({
     requestRedraw();
   },
   redraw() {
-    if (!weatherData) return;
+    if (!weatherData || !this._origin) return;
     this._drawRasterFields();
     if (!layerState.wind.on) {
       const ctx = this._marks.getContext("2d");
