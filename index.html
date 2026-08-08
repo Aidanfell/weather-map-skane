@@ -86,6 +86,7 @@
     <!-- Modal Tabs -->
     <div class="modal-tabs">
       <button type="button" class="tab-btn active" id="tab-create-alert">🔔 Set Alert</button>
+      <button type="button" class="tab-btn" id="tab-manage-alerts">📋 My Active Alerts (<span id="active-alerts-count">0</span>)</button>
       <button type="button" class="tab-btn" id="tab-cancel-alert">🔕 Unsubscribe</button>
     </div>
 
@@ -131,7 +132,22 @@
       </div>
     </form>
 
-    <!-- Tab 2: Unsubscribe Form -->
+    <!-- Tab 2: Manage Active Alerts List -->
+    <div id="manage-alerts-section" hidden>
+      <div id="active-alerts-list" class="active-alerts-list">
+        <div class="empty-alerts">No active rain alerts found on this device.</div>
+      </div>
+      <div class="cron-info-box">
+        <div class="cron-title">⚡ How Alerts Work:</div>
+        <p>Your alerts are checked <strong>every 2 hours</strong> by an automated GitHub Action workflow. An email report is dispatched as soon as rain exceeding your threshold is forecast for your area.</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" id="send-test-email-btn" class="btn-secondary" title="Preview sample email alert">⚡ Send Sample Test Email</button>
+        <button type="button" id="close-manage-btn" class="btn-primary">Done</button>
+      </div>
+    </div>
+
+    <!-- Tab 3: Unsubscribe Form -->
     <form id="unsub-form" hidden>
       <div class="form-group">
         <label for="unsub-email">Your Email Address</label>

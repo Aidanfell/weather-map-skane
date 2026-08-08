@@ -849,27 +849,88 @@ speedBtn.addEventListener("click", () => {
 /* ---------- UI: Rain Email Alert Modal & Unsubscribe Engine ---------- */
 let currentAlertLocation = { name: "Skåne Central", lat: 55.95, lon: 13.55 };
 
+function getStoredAlerts() {
+  try {
+    return JSON.parse(localStorage.getItem("rain_alerts") || "[]");
+  } catch (e) {
+    return [];
+  }
+}
+
+function renderActiveAlerts() {
+  const alerts = getStoredAlerts();
+  const countEl = document.getElementById("active-alerts-count");
+  if (countEl) countEl.textContent = alerts.length;
+
+  const listEl = document.getElementById("active-alerts-list");
+  if (!listEl) return;
+
+  if (alerts.length === 0) {
+    listEl.innerHTML = `<div class="empty-alerts">No active rain alerts found on this device.</div>`;
+    return;
+  }
+
+  listEl.innerHTML = alerts.map((a, idx) => `
+    <div class="active-alert-card">
+      <div class="info">
+        <strong>📍 ${a.locationName}</strong>
+        <span>${a.email} · Threshold: &gt;${a.threshold} mm/h</span>
+      </div>
+      <div class="badge-group">
+        <span class="status-badge live" title="Checked every 2h by GitHub Action">🟢 Active</span>
+        <button class="delete-alert-btn" data-index="${idx}" title="Delete alert">🗑️</button>
+      </div>
+    </div>
+  `).join("");
+
+  listEl.querySelectorAll(".delete-alert-btn").forEach(btn => {
+    btn.addEventListener("click", e => {
+      const idx = +e.currentTarget.getAttribute("data-index");
+      const current = getStoredAlerts();
+      current.splice(idx, 1);
+      localStorage.setItem("rain_alerts", JSON.stringify(current));
+      renderActiveAlerts();
+    });
+  });
+}
+
 function switchModalTab(tab) {
   const createTab = document.getElementById("tab-create-alert");
+  const manageTab = document.getElementById("tab-manage-alerts");
   const unsubTab = document.getElementById("tab-cancel-alert");
+
   const alertForm = document.getElementById("alert-form");
+  const manageSection = document.getElementById("manage-alerts-section");
   const unsubForm = document.getElementById("unsub-form");
 
-  if (tab === "unsub") {
-    createTab?.classList.remove("active");
+  [createTab, manageTab, unsubTab].forEach(t => t?.classList.remove("active"));
+  if (alertForm) alertForm.hidden = true;
+  if (manageSection) manageSection.hidden = true;
+  if (unsubForm) unsubForm.hidden = true;
+
+  if (tab === "manage") {
+    manageTab?.classList.add("active");
+    if (manageSection) manageSection.hidden = false;
+    renderActiveAlerts();
+  } else if (tab === "unsub") {
     unsubTab?.classList.add("active");
-    if (alertForm) alertForm.hidden = true;
     if (unsubForm) unsubForm.hidden = false;
   } else {
-    unsubTab?.classList.remove("active");
     createTab?.classList.add("active");
-    if (unsubForm) unsubForm.hidden = true;
     if (alertForm) alertForm.hidden = false;
   }
 }
 
 document.getElementById("tab-create-alert")?.addEventListener("click", () => switchModalTab("create"));
+document.getElementById("tab-manage-alerts")?.addEventListener("click", () => switchModalTab("manage"));
 document.getElementById("tab-cancel-alert")?.addEventListener("click", () => switchModalTab("unsub"));
+document.getElementById("close-manage-btn")?.addEventListener("click", () => closeAlertModal());
+
+document.getElementById("send-test-email-btn")?.addEventListener("click", () => {
+  const alerts = getStoredAlerts();
+  const targetEmail = alerts.length ? alerts[0].email : "your.email@example.com";
+  alert(`⚡ TEST ALERT PREVIEW\n\nTo: ${targetEmail}\nSubject: 🌧️ Rain Alert Preview for ${currentAlertLocation.name}\n\nIncoming rain >0.5 mm/h detected for ${currentAlertLocation.name}!\n\nGitHub Action cron checks forecasts every 2 hours.`);
+});
 
 function openAlertModal(locName, lat, lon, activeTab = "create") {
   currentAlertLocation = {
@@ -885,6 +946,7 @@ function openAlertModal(locName, lat, lon, activeTab = "create") {
   const unsubStatusEl = document.getElementById("unsub-status");
   if (unsubStatusEl) { unsubStatusEl.hidden = true; unsubStatusEl.className = "alert-status"; }
 
+  renderActiveAlerts();
   switchModalTab(activeTab);
   document.getElementById("alert-modal").hidden = false;
 }
