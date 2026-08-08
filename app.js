@@ -315,13 +315,10 @@ const WeatherOverlay = L.Layer.extend({
 
         if (f <= 0.005) { px[o + 3] = 0; continue; }
 
-        const gx = (ll.lng - REGION.lonMin) / (REGION.lonMax - REGION.lonMin) * (NX - 1);
-        const gy = (ll.lat - REGION.latMin) / (REGION.latMax - REGION.latMin) * (NY - 1);
-
         let v = null;
-        if (isPrecipMode) v = sample("precipitation", gx, gy);
-        else if (isCloudMode) v = sample("cloud_cover", gx, gy);
-        else if (isTempMode) v = sample("temperature_2m", gx, gy);
+        if (isPrecipMode) v = sample("precipitation", ll.lng, ll.lat);
+        else if (isCloudMode) v = sample("cloud_cover", ll.lng, ll.lat);
+        else if (isTempMode) v = sample("temperature_2m", ll.lng, ll.lat);
 
         if (v == null || isNaN(v)) { px[o + 3] = 0; continue; }
 
@@ -357,11 +354,8 @@ const WeatherOverlay = L.Layer.extend({
         return;
       }
 
-      const gx = (p.x - REGION.lonMin) / (REGION.lonMax - REGION.lonMin) * (NX - 1);
-      const gy = (p.y - REGION.latMin) / (REGION.latMax - REGION.latMin) * (NY - 1);
-
-      const spd = sample("wind_speed_10m", gx, gy);
-      const dir = sample("wind_direction_10m", gx, gy);
+      const spd = sample("wind_speed_10m", p.x, p.y);
+      const dir = sample("wind_direction_10m", p.x, p.y);
 
       if (spd == null || dir == null) return;
 
@@ -399,24 +393,28 @@ const WeatherOverlay = L.Layer.extend({
 overlay = new WeatherOverlay();
 map.addLayer(overlay);
 
-/* ---------- Bilinear Field Sampler ---------- */
-function sample(varName, gx, gy) {
-  if (!weatherData) return null;
-  const x0 = Math.min(Math.max(Math.floor(gx), 0), NX - 2);
-  const y0 = Math.min(Math.max(Math.floor(gy), 0), NY - 2);
-  const fx = Math.min(Math.max(gx - x0, 0), 1);
-  const fy = Math.min(Math.max(gy - y0, 0), 1);
+/* ---------- Inverse Distance Weighting (IDW) Spatial Sampler ---------- */
+function sample(varName, targetLng, targetLat) {
+  if (!weatherData || !weatherData.length) return null;
 
-  const getH = idx => {
-    const pt = weatherData[idx];
-    return (pt && pt.hourly && pt.hourly[varName]) ? pt.hourly[varName][timeIdx] : null;
-  };
+  let num = 0, den = 0;
+  for (let i = 0; i < CITIES.length; i++) {
+    const c = CITIES[i];
+    const dataPt = weatherData[i];
+    if (!dataPt || !dataPt.hourly || !dataPt.hourly[varName]) continue;
 
-  const v00 = getH(y0 * NX + x0), v10 = getH(y0 * NX + x0 + 1);
-  const v01 = getH((y0 + 1) * NX + x0), v11 = getH((y0 + 1) * NX + x0 + 1);
+    const val = dataPt.hourly[varName][timeIdx];
+    if (val == null || isNaN(val)) continue;
 
-  if (v00 == null || v10 == null || v01 == null || v11 == null) return v00;
-  return v00 * (1 - fx) * (1 - fy) + v10 * fx * (1 - fy) + v01 * (1 - fx) * fy + v11 * fx * fy;
+    const cLng = c[2], cLat = c[1];
+    const distSq = (targetLng - cLng) * (targetLng - cLng) + (targetLat - cLat) * (targetLat - cLat);
+    if (distSq < 0.00005) return val;
+
+    const weight = 1 / Math.pow(distSq, 1.15);
+    num += val * weight;
+    den += weight;
+  }
+  return den > 0 ? num / den : null;
 }
 
 /* ---------- Fallback Synthetic Data Generator (Rate Limit Protection) ---------- */
@@ -428,57 +426,46 @@ function generateFallbackData() {
     timesArr.push(d.toISOString().slice(0, 13) + ":00");
   }
 
-  const data = [];
-  for (let iy = 0; iy < NY; iy++) {
-    for (let ix = 0; ix < NX; ix++) {
-      const lat = lats[iy], lon = lons[ix];
-      // Normalize longitude across Skåne (0.0 at West coast, 1.0 at East coast)
-      const westToEast = (lon - REGION.lonMin) / (REGION.lonMax - REGION.lonMin);
+  return CITIES.map((c, idx) => {
+    const westToEast = (c[2] - REGION.lonMin) / (REGION.lonMax - REGION.lonMin);
+    const temps = [], precips = [], clouds = [], windSpds = [], windDirs = [];
+    for (let i = 0; i < 144; i++) {
+      const timePhase = i / 10;
+      const frontPosition = Math.sin(timePhase - westToEast * 4.5);
+      const rVal = Math.max(0, (frontPosition - 0.45) * 5.0);
 
-      const temps = [], precips = [], clouds = [], windSpds = [], windDirs = [];
-      for (let i = 0; i < 144; i++) {
-        const timePhase = i / 10;
-        // Realistic frontal rain band sweeping West -> East across Skåne & Blekinge
-        const frontPosition = Math.sin(timePhase - westToEast * 4.5);
-        const rVal = Math.max(0, (frontPosition - 0.45) * 5.0);
-
-        temps.push(14 + Math.sin(timePhase) * 4 - westToEast * 0.5);
-        precips.push(rVal > 0.2 ? rVal : 0);
-        clouds.push(Math.min(100, Math.max(10, Math.floor(30 + (frontPosition + 0.5) * 45))));
-        windSpds.push(Math.max(1.5, 4.0 + (frontPosition + 0.5) * 3.5));
-        windDirs.push(225 + Math.floor(Math.sin(timePhase) * 15));
-      }
-      data.push({
-        latitude: lat, longitude: lon,
-        hourly: {
-          time: timesArr,
-          temperature_2m: temps,
-          precipitation: precips,
-          cloud_cover: clouds,
-          wind_speed_10m: windSpds,
-          wind_direction_10m: windDirs,
-          weather_code: precips.map(p => p > 2 ? 61 : (p > 0.1 ? 51 : 2)),
-          relative_humidity_2m: temps.map(t => 70 + Math.floor((25 - t)))
-        }
-      });
+      temps.push(14 + Math.sin(timePhase) * 4 - westToEast * 0.5);
+      precips.push(rVal > 0.2 ? rVal : 0);
+      clouds.push(Math.min(100, Math.max(10, Math.floor(30 + (frontPosition + 0.5) * 45))));
+      windSpds.push(Math.max(1.5, 4.0 + (frontPosition + 0.5) * 3.5));
+      windDirs.push(225 + Math.floor(Math.sin(timePhase) * 15));
     }
-  }
-  return data;
+    return {
+      latitude: c[1], longitude: c[2],
+      hourly: {
+        time: timesArr,
+        temperature_2m: temps,
+        precipitation: precips,
+        cloud_cover: clouds,
+        wind_speed_10m: windSpds,
+        wind_direction_10m: windDirs,
+        weather_code: precips.map(p => p > 2 ? 61 : (p > 0.1 ? 51 : 2)),
+        relative_humidity_2m: temps.map(t => 70 + Math.floor((25 - t)))
+      }
+    };
+  });
 }
 
 /* ---------- Data Ingestion & Resilient Fetch Engine ---------- */
 async function loadData() {
-  const CACHE_KEY = "skane_weather_cache_v2";
   let isCachedMode = false;
+  const CACHE_KEY = "skane_weather_cache_v30";
 
-  const latParam = [], lonParam = [];
-  for (let iy = 0; iy < NY; iy++) for (let ix = 0; ix < NX; ix++) {
-    latParam.push(lats[iy].toFixed(3));
-    lonParam.push(lons[ix].toFixed(3));
-  }
+  const latParam = CITIES.map(c => c[1].toFixed(4)).join(",");
+  const lonParam = CITIES.map(c => c[2].toFixed(4)).join(",");
 
   const url = "https://api.open-meteo.com/v1/forecast"
-    + "?latitude=" + latParam.join(",") + "&longitude=" + lonParam.join(",")
+    + "?latitude=" + latParam + "&longitude=" + lonParam
     + "&hourly=temperature_2m,precipitation,cloud_cover,wind_speed_10m,wind_direction_10m"
     + "&wind_speed_unit=ms&forecast_days=6&timezone=auto";
 
@@ -492,9 +479,6 @@ async function loadData() {
     } catch (e) {}
   } catch (err) {
     console.warn("Open-Meteo fetch failed/rate limited. Activating resilient cache/fallback mode.", err);
-    isCachedMode = true;
-    
-    // 1. Try reading from sessionStorage cache
     let loadedFromCache = false;
     try {
       const stored = sessionStorage.getItem(CACHE_KEY);
@@ -507,7 +491,6 @@ async function loadData() {
       }
     } catch (e) {}
 
-    // 2. If no cache exists, use realistic synthetic forecast generator
     if (!loadedFromCache) {
       weatherData = generateFallbackData();
     }
