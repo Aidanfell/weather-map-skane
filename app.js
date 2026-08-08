@@ -6,8 +6,8 @@
 
 /* ---------- Region & High-Resolution Grid ---------- */
 const REGION = { latMin: 55.3, latMax: 56.75, lonMin: 12.2, lonMax: 16.3 };
-const NX = 36, NY = 24; // 864 grid points for pinpoint precision
-const BUFFER_W = 360, BUFFER_H = 240; // High-res offscreen interpolation buffer
+const NX = 20, NY = 13; // 260 grid points for smooth radar precision
+const BUFFER_W = 320, BUFFER_H = 200; // High-res offscreen interpolation buffer
 
 const lats = [], lons = [];
 for (let iy = 0; iy < NY; iy++) lats.push(REGION.latMin + (REGION.latMax - REGION.latMin) * iy / (NY - 1));
@@ -410,34 +410,23 @@ function sample(varName, gx, gy) {
   return v00 * (1 - fx) * (1 - fy) + v10 * fx * (1 - fy) + v01 * (1 - fx) * fy + v11 * fx * fy;
 }
 
-/* ---------- Data Ingestion & Open-Meteo Batch Query ---------- */
+/* ---------- Data Ingestion & Open-Meteo Query ---------- */
 async function loadData() {
-  const points = [];
+  const latParam = [], lonParam = [];
   for (let iy = 0; iy < NY; iy++) for (let ix = 0; ix < NX; ix++) {
-    points.push({ lat: lats[iy].toFixed(4), lon: lons[ix].toFixed(4) });
+    latParam.push(lats[iy].toFixed(3));
+    lonParam.push(lons[ix].toFixed(3));
   }
 
-  // Chunk grid into small batches to keep GET URL lengths safely under HTTP 414 limits
-  const CHUNK_SIZE = 100;
-  const chunks = [];
-  for (let i = 0; i < points.length; i += CHUNK_SIZE) {
-    chunks.push(points.slice(i, i + CHUNK_SIZE));
-  }
+  const url = "https://api.open-meteo.com/v1/forecast"
+    + "?latitude=" + latParam.join(",") + "&longitude=" + lonParam.join(",")
+    + "&hourly=temperature_2m,precipitation,rain,cloud_cover,wind_speed_10m,wind_direction_10m,weather_code,relative_humidity_2m"
+    + "&wind_speed_unit=ms&forecast_days=6&timezone=auto";
 
-  const results = await Promise.all(chunks.map(async chunk => {
-    const latsStr = chunk.map(p => p.lat).join(",");
-    const lonsStr = chunk.map(p => p.lon).join(",");
-    const url = "https://api.open-meteo.com/v1/forecast"
-      + "?latitude=" + latsStr + "&longitude=" + lonsStr
-      + "&hourly=temperature_2m,precipitation,rain,showers,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,wind_speed_10m,wind_direction_10m,weather_code,relative_humidity_2m"
-      + "&wind_speed_unit=ms&forecast_days=6&timezone=auto";
-    const res = await fetch(url);
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const json = await res.json();
-    return Array.isArray(json) ? json : [json];
-  }));
-
-  weatherData = results.flat();
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  const json = await res.json();
+  weatherData = Array.isArray(json) ? json : [json];
   times = weatherData[0].hourly.time;
 
   const now = Date.now();
