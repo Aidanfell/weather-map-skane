@@ -70,6 +70,12 @@ function buildEmailHtml(alert, incomingRain) {
           Open Live Radar Map
         </a>
       </div>
+
+      <div style="text-align: center; margin-top: 24px; border-top: 1px solid #1e293b; padding-top: 16px;">
+        <span style="font-size: 11px; color: #64748b;">
+          Don't want to receive rain notifications? <a href="https://aidanfell.github.io/weather-map-skane/?unsubscribe=${encodeURIComponent(alert.email)}" style="color: #38bdf8; text-decoration: underline;">Unsubscribe from Rain Alerts</a>
+        </span>
+      </div>
     </div>
   `;
 }

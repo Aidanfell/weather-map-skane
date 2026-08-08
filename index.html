@@ -76,12 +76,20 @@
       <div class="title-group">
         <span class="bell-icon">🔔</span>
         <div>
-          <h3>Set Rain Email Alert</h3>
+          <h3 id="modal-main-title">Rain Email Alerts</h3>
           <span class="sub-location" id="modal-location-subtitle">Skåne Area</span>
         </div>
       </div>
       <button id="close-modal-btn" class="close-btn" type="button">✕</button>
     </div>
+
+    <!-- Modal Tabs -->
+    <div class="modal-tabs">
+      <button type="button" class="tab-btn active" id="tab-create-alert">🔔 Set Alert</button>
+      <button type="button" class="tab-btn" id="tab-cancel-alert">🔕 Unsubscribe</button>
+    </div>
+
+    <!-- Tab 1: Create Alert Form -->
     <form id="alert-form">
       <div class="form-group">
         <label for="alert-email">Your Email Address</label>
@@ -120,6 +128,22 @@
       <div class="modal-footer">
         <button type="button" id="cancel-modal-btn" class="btn-secondary">Cancel</button>
         <button type="submit" class="btn-primary">Save Rain Alert</button>
+      </div>
+    </form>
+
+    <!-- Tab 2: Unsubscribe Form -->
+    <form id="unsub-form" hidden>
+      <div class="form-group">
+        <label for="unsub-email">Your Email Address</label>
+        <input type="email" id="unsub-email" placeholder="name@example.com" required>
+      </div>
+      <p class="unsub-help-text">Enter your email to cancel all active rain alerts for your locations.</p>
+
+      <div id="unsub-status" class="alert-status" hidden></div>
+
+      <div class="modal-footer">
+        <button type="button" id="cancel-unsub-btn" class="btn-secondary">Close</button>
+        <button type="submit" class="btn-danger">Unsubscribe All Alerts</button>
       </div>
     </form>
   </div>

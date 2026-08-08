@@ -838,21 +838,46 @@ speedBtn.addEventListener("click", () => {
   if (playing) setPlaying(true);
 });
 
-/* ---------- UI: Rain Email Alert Modal ---------- */
+/* ---------- UI: Rain Email Alert Modal & Unsubscribe Engine ---------- */
 let currentAlertLocation = { name: "Skåne Central", lat: 55.95, lon: 13.55 };
 
-function openAlertModal(locName, lat, lon) {
+function switchModalTab(tab) {
+  const createTab = document.getElementById("tab-create-alert");
+  const unsubTab = document.getElementById("tab-cancel-alert");
+  const alertForm = document.getElementById("alert-form");
+  const unsubForm = document.getElementById("unsub-form");
+
+  if (tab === "unsub") {
+    createTab?.classList.remove("active");
+    unsubTab?.classList.add("active");
+    if (alertForm) alertForm.hidden = true;
+    if (unsubForm) unsubForm.hidden = false;
+  } else {
+    unsubTab?.classList.remove("active");
+    createTab?.classList.add("active");
+    if (unsubForm) unsubForm.hidden = true;
+    if (alertForm) alertForm.hidden = false;
+  }
+}
+
+document.getElementById("tab-create-alert")?.addEventListener("click", () => switchModalTab("create"));
+document.getElementById("tab-cancel-alert")?.addEventListener("click", () => switchModalTab("unsub"));
+
+function openAlertModal(locName, lat, lon, activeTab = "create") {
   currentAlertLocation = {
     name: locName || document.getElementById("readout-location").textContent || "Selected Area",
     lat: lat || (inspectMarker ? inspectMarker.getLatLng().lat : 55.95),
     lon: lon || (inspectMarker ? inspectMarker.getLatLng().lng : 13.55),
   };
   document.getElementById("modal-location-subtitle").textContent = currentAlertLocation.name;
+
   const statusEl = document.getElementById("alert-status");
-  if (statusEl) {
-    statusEl.hidden = true;
-    statusEl.className = "alert-status";
-  }
+  if (statusEl) { statusEl.hidden = true; statusEl.className = "alert-status"; }
+
+  const unsubStatusEl = document.getElementById("unsub-status");
+  if (unsubStatusEl) { unsubStatusEl.hidden = true; unsubStatusEl.className = "alert-status"; }
+
+  switchModalTab(activeTab);
   document.getElementById("alert-modal").hidden = false;
 }
 
@@ -864,7 +889,9 @@ document.getElementById("open-alert-modal-btn")?.addEventListener("click", () =>
 document.getElementById("open-alert-modal-top")?.addEventListener("click", () => openAlertModal());
 document.getElementById("close-modal-btn")?.addEventListener("click", closeAlertModal);
 document.getElementById("cancel-modal-btn")?.addEventListener("click", closeAlertModal);
+document.getElementById("cancel-unsub-btn")?.addEventListener("click", closeAlertModal);
 
+// Create Alert Form Submission
 document.getElementById("alert-form")?.addEventListener("submit", e => {
   e.preventDefault();
   const email = document.getElementById("alert-email").value.trim();
@@ -907,6 +934,50 @@ document.getElementById("alert-form")?.addEventListener("submit", e => {
     document.getElementById("alert-form").reset();
   }, 2200);
 });
+
+// Unsubscribe Form Submission
+document.getElementById("unsub-form")?.addEventListener("submit", e => {
+  e.preventDefault();
+  const email = document.getElementById("unsub-email").value.trim();
+  const statusEl = document.getElementById("unsub-status");
+
+  if (!email || !email.includes("@")) {
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.className = "alert-status error";
+      statusEl.textContent = "Please enter a valid email address.";
+    }
+    return;
+  }
+
+  try {
+    const existing = JSON.parse(localStorage.getItem("rain_alerts") || "[]");
+    const filtered = existing.filter(item => item.email.toLowerCase() !== email.toLowerCase());
+    localStorage.setItem("rain_alerts", JSON.stringify(filtered));
+  } catch (err) {}
+
+  if (statusEl) {
+    statusEl.hidden = false;
+    statusEl.className = "alert-status success";
+    statusEl.textContent = `✓ Unsubscribed! All rain alerts for ${email} have been canceled.`;
+  }
+
+  setTimeout(() => {
+    closeAlertModal();
+    document.getElementById("unsub-form").reset();
+  }, 2400);
+});
+
+// Check if URL has ?unsubscribe=email parameter from an alert email
+(function checkUrlUnsubscribe() {
+  const params = new URLSearchParams(window.location.search);
+  const unsubEmail = params.get("unsubscribe") || params.get("email");
+  if (unsubEmail) {
+    const input = document.getElementById("unsub-email");
+    if (input) input.value = unsubEmail;
+    openAlertModal("Alert Cancellation", 55.95, 13.55, "unsub");
+  }
+})();
 
 /* ---------- Initialization ---------- */
 initQuickLayers();
