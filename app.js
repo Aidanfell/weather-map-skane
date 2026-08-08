@@ -407,26 +407,37 @@ function sample(varName, gx, gy) {
   const v01 = getH((y0 + 1) * NX + x0), v11 = getH((y0 + 1) * NX + x0 + 1);
 
   if (v00 == null || v10 == null || v01 == null || v11 == null) return v00;
-  return v00 * (1 - fx) * (1 - fy) + v10 * fx * (1 - fy) + v01 * (1 - fx) * gy + v11 * fx * fy;
+  return v00 * (1 - fx) * (1 - fy) + v10 * fx * (1 - fy) + v01 * (1 - fx) * fy + v11 * fx * fy;
 }
 
-/* ---------- Data Ingestion & Open-Meteo Query ---------- */
+/* ---------- Data Ingestion & Open-Meteo Batch Query ---------- */
 async function loadData() {
-  const latParam = [], lonParam = [];
+  const points = [];
   for (let iy = 0; iy < NY; iy++) for (let ix = 0; ix < NX; ix++) {
-    latParam.push(lats[iy].toFixed(4));
-    lonParam.push(lons[ix].toFixed(4));
+    points.push({ lat: lats[iy].toFixed(4), lon: lons[ix].toFixed(4) });
   }
 
-  const url = "https://api.open-meteo.com/v1/forecast"
-    + "?latitude=" + latParam.join(",") + "&longitude=" + lonParam.join(",")
-    + "&hourly=temperature_2m,precipitation,rain,showers,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,wind_speed_10m,wind_direction_10m,weather_code,relative_humidity_2m"
-    + "&wind_speed_unit=ms&forecast_days=6&timezone=auto";
+  // Chunk grid into small batches to keep GET URL lengths safely under HTTP 414 limits
+  const CHUNK_SIZE = 100;
+  const chunks = [];
+  for (let i = 0; i < points.length; i += CHUNK_SIZE) {
+    chunks.push(points.slice(i, i + CHUNK_SIZE));
+  }
 
-  const res = await fetch(url);
-  if (!res.ok) throw new Error("HTTP " + res.status);
-  const json = await res.json();
-  weatherData = Array.isArray(json) ? json : [json];
+  const results = await Promise.all(chunks.map(async chunk => {
+    const latsStr = chunk.map(p => p.lat).join(",");
+    const lonsStr = chunk.map(p => p.lon).join(",");
+    const url = "https://api.open-meteo.com/v1/forecast"
+      + "?latitude=" + latsStr + "&longitude=" + lonsStr
+      + "&hourly=temperature_2m,precipitation,rain,showers,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,wind_speed_10m,wind_direction_10m,weather_code,relative_humidity_2m"
+      + "&wind_speed_unit=ms&forecast_days=6&timezone=auto";
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const json = await res.json();
+    return Array.isArray(json) ? json : [json];
+  }));
+
+  weatherData = results.flat();
   times = weatherData[0].hourly.time;
 
   const now = Date.now();
