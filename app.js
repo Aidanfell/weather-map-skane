@@ -228,14 +228,15 @@ function requestRedraw() {
 }
 
 // Particle Streamlines Engine for Wind Flow
-const PARTICLE_COUNT = 400;
+const PARTICLE_COUNT = 320;
 const particles = [];
 for (let i = 0; i < PARTICLE_COUNT; i++) {
   particles.push({
     x: Math.random() * (REGION.lonMax - REGION.lonMin) + REGION.lonMin,
     y: Math.random() * (REGION.latMax - REGION.latMin) + REGION.latMin,
-    age: Math.floor(Math.random() * 60),
-    maxAge: 40 + Math.random() * 40,
+    age: Math.floor(Math.random() * 80),
+    maxAge: 60 + Math.random() * 60,
+    history: [],
   });
 }
 
@@ -341,8 +342,8 @@ const WeatherOverlay = L.Layer.extend({
   },
   _drawWindParticles() {
     const ctx = this._marks.getContext("2d");
-    ctx.fillStyle = "rgba(9, 13, 22, 0.15)";
-    ctx.fillRect(0, 0, this._w, this._h);
+    // Clear canvas every frame so map tiles stay 100% visible
+    ctx.clearRect(0, 0, this._w, this._h);
 
     const opacity = layerState.wind.opacity;
 
@@ -352,6 +353,7 @@ const WeatherOverlay = L.Layer.extend({
         p.x = Math.random() * (REGION.lonMax - REGION.lonMin) + REGION.lonMin;
         p.y = Math.random() * (REGION.latMax - REGION.latMin) + REGION.latMin;
         p.age = 0;
+        p.history = [];
         return;
       }
 
@@ -364,25 +366,31 @@ const WeatherOverlay = L.Layer.extend({
       if (spd == null || dir == null) return;
 
       const rad = (dir + 180) * Math.PI / 180;
-      const stepDeg = Math.min(0.008 + (spd * 0.003), 0.035);
+      // Slower, graceful particle movement
+      const stepDeg = Math.min(0.0012 + (spd * 0.0006), 0.006);
 
-      const oldPt = this._map.latLngToLayerPoint([p.y, p.x]);
+      const pt = this._map.latLngToLayerPoint([p.y, p.x]);
+      const px = pt.x - this._origin.x, py = pt.y - this._origin.y;
+
+      p.history.push({ x: px, y: py });
+      if (p.history.length > 12) p.history.shift();
+
       p.x += Math.sin(rad) * stepDeg;
       p.y += -Math.cos(rad) * stepDeg;
-      const newPt = this._map.latLngToLayerPoint([p.y, p.x]);
 
-      const ox = oldPt.x - this._origin.x, oy = oldPt.y - this._origin.y;
-      const nx = newPt.x - this._origin.x, ny = newPt.y - this._origin.y;
-
-      if (ox < -10 || oy < -10 || ox > this._w + 10 || oy > this._h + 10) return;
+      if (px < -20 || py < -20 || px > this._w + 20 || py > this._h + 20 || p.history.length < 2) return;
 
       const c = COLORMAPS.wind(spd);
       const lifeFade = 1 - Math.abs((p.age / p.maxAge) - 0.5) * 2;
-      ctx.strokeStyle = `rgba(${c[0]|0},${c[1]|0},${c[2]|0},${lifeFade * opacity * 0.85})`;
-      ctx.lineWidth = Math.min(1.2 + spd * 0.12, 3.5);
+
       ctx.beginPath();
-      ctx.moveTo(ox, oy);
-      ctx.lineTo(nx, ny);
+      ctx.moveTo(p.history[0].x, p.history[0].y);
+      for (let i = 1; i < p.history.length; i++) {
+        ctx.lineTo(p.history[i].x, p.history[i].y);
+      }
+
+      ctx.strokeStyle = `rgba(${c[0]|0},${c[1]|0},${c[2]|0},${lifeFade * opacity * 0.75})`;
+      ctx.lineWidth = Math.min(1.0 + spd * 0.1, 2.8);
       ctx.stroke();
     });
   },
@@ -970,7 +978,8 @@ document.getElementById("unsub-form")?.addEventListener("submit", e => {
 
 // Check if URL has ?unsubscribe=email parameter from an alert email
 (function checkUrlUnsubscribe() {
-  const params = new URLSearchParams(window.location.search);
+  const searchStr = (typeof window !== "undefined" && window.location) ? window.location.search : "";
+  const params = new URLSearchParams(searchStr);
   const unsubEmail = params.get("unsubscribe") || params.get("email");
   if (unsubEmail) {
     const input = document.getElementById("unsub-email");
