@@ -210,9 +210,7 @@ function initCityMarkers() {
 function updateCityBadges() {
   if (!weatherData) return;
   cityMarkerInstances.forEach(({ name, la, lo }) => {
-    const gx = (lo - REGION.lonMin) / (REGION.lonMax - REGION.lonMin) * (NX - 1);
-    const gy = (la - REGION.latMin) / (REGION.latMax - REGION.latMin) * (NY - 1);
-    const t = sample("temperature_2m", gx, gy);
+    const t = sample("temperature_2m", lo, la);
     const el = document.getElementById(`city-temp-${name.replace(/\s+/g, '')}`);
     if (el && t != null) {
       el.textContent = Math.round(t) + "°";
@@ -628,21 +626,19 @@ function getWindCardinal(deg) {
 
 function inspectPoint(latlng, customTitle) {
   if (!weatherData) return;
-  const gx = (latlng.lng - REGION.lonMin) / (REGION.lonMax - REGION.lonMin) * (NX - 1);
-  const gy = (latlng.lat - REGION.latMin) / (REGION.latMax - REGION.latMin) * (NY - 1);
 
-  if (gx < 0 || gy < 0 || gx > NX - 1 || gy > NY - 1) {
+  if (latlng.lng < REGION.lonMin || latlng.lng > REGION.lonMax || latlng.lat < REGION.latMin || latlng.lat > REGION.latMax) {
     readoutBody.innerHTML = `<div class="inspect-placeholder">Outside forecast area</div>`;
     return;
   }
 
-  const temp = sample("temperature_2m", gx, gy);
-  const precip = sample("precipitation", gx, gy);
-  const clouds = sample("cloud_cover", gx, gy);
-  const windSpd = sample("wind_speed_10m", gx, gy);
-  const windDir = sample("wind_direction_10m", gx, gy);
-  const humidity = sample("relative_humidity_2m", gx, gy);
-  const code = sample("weather_code", gx, gy);
+  const temp = sample("temperature_2m", latlng.lng, latlng.lat);
+  const precip = sample("precipitation", latlng.lng, latlng.lat);
+  const clouds = sample("cloud_cover", latlng.lng, latlng.lat);
+  const windSpd = sample("wind_speed_10m", latlng.lng, latlng.lat);
+  const windDir = sample("wind_direction_10m", latlng.lng, latlng.lat);
+  const humidity = sample("relative_humidity_2m", latlng.lng, latlng.lat);
+  const code = sample("weather_code", latlng.lng, latlng.lat);
 
   const cond = getWeatherCondition(Math.round(code || 0), precip || 0);
 
