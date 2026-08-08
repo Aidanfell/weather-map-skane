@@ -50,7 +50,10 @@
 <!-- Weather Inspector Widget -->
 <div id="readout" class="panel">
   <div class="readout-header">
-    <span class="location-name" id="readout-location">Skåne Forecast</span>
+    <div>
+      <span class="location-name" id="readout-location">Skåne Forecast</span>
+      <button id="clear-pin-btn" style="display:none;" title="Unmark / remove pin">✕ Clear</button>
+    </div>
     <span class="time-stamp" id="readout-time">Live</span>
   </div>
   <div id="readout-body">
@@ -89,7 +92,7 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="land.js"></script>
-<script src="app.js?v=7"></script>
+<script src="app.js?v=12"></script>
 </body>
 </html>
 
