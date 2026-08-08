@@ -32,6 +32,9 @@
     <button class="layer-pill" data-layer="temp">
       <span class="icon">🌡️</span> Temperature
     </button>
+    <button class="layer-pill alert-pill" id="open-alert-modal-top">
+      <span class="icon">🔔</span> Rain Alert
+    </button>
   </nav>
 </header>
 
@@ -58,6 +61,67 @@
   </div>
   <div id="readout-body">
     <div class="inspect-placeholder">Hover or tap map to inspect forecast</div>
+  </div>
+  <div class="readout-footer">
+    <button id="open-alert-modal-btn" class="alert-trigger-btn">
+      <span class="icon">🔔</span> Set Rain Email Alert
+    </button>
+  </div>
+</div>
+
+<!-- Rain Email Alert Modal -->
+<div id="alert-modal" class="modal-backdrop" hidden>
+  <div class="modal-card">
+    <div class="modal-header">
+      <div class="title-group">
+        <span class="bell-icon">🔔</span>
+        <div>
+          <h3>Set Rain Email Alert</h3>
+          <span class="sub-location" id="modal-location-subtitle">Skåne Area</span>
+        </div>
+      </div>
+      <button id="close-modal-btn" class="close-btn" type="button">✕</button>
+    </div>
+    <form id="alert-form">
+      <div class="form-group">
+        <label for="alert-email">Your Email Address</label>
+        <input type="email" id="alert-email" placeholder="name@example.com" required>
+      </div>
+
+      <div class="form-group">
+        <label>Rain Threshold</label>
+        <div class="threshold-grid">
+          <label class="radio-card">
+            <input type="radio" name="threshold" value="0.2" checked>
+            <span class="card-content">
+              <strong>Any Rain</strong>
+              <small>&gt; 0.2 mm/h</small>
+            </span>
+          </label>
+          <label class="radio-card">
+            <input type="radio" name="threshold" value="1.5">
+            <span class="card-content">
+              <strong>Moderate</strong>
+              <small>&gt; 1.5 mm/h</small>
+            </span>
+          </label>
+          <label class="radio-card">
+            <input type="radio" name="threshold" value="4.0">
+            <span class="card-content">
+              <strong>Heavy Downpour</strong>
+              <small>&gt; 4.0 mm/h</small>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div id="alert-status" class="alert-status" hidden></div>
+
+      <div class="modal-footer">
+        <button type="button" id="cancel-modal-btn" class="btn-secondary">Cancel</button>
+        <button type="submit" class="btn-primary">Save Rain Alert</button>
+      </div>
+    </form>
   </div>
 </div>
 

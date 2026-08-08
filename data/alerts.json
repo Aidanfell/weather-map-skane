@@ -1,0 +1,11 @@
+[
+  {
+    "id": "alert-malmo",
+    "locationName": "Malmö Area",
+    "lat": 55.605,
+    "lon": 13.003,
+    "email": "alert@example.com",
+    "threshold": 0.5,
+    "createdAt": "2026-08-08T02:37:00Z"
+  }
+]

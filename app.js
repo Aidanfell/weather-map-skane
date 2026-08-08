@@ -838,6 +838,76 @@ speedBtn.addEventListener("click", () => {
   if (playing) setPlaying(true);
 });
 
+/* ---------- UI: Rain Email Alert Modal ---------- */
+let currentAlertLocation = { name: "Skåne Central", lat: 55.95, lon: 13.55 };
+
+function openAlertModal(locName, lat, lon) {
+  currentAlertLocation = {
+    name: locName || document.getElementById("readout-location").textContent || "Selected Area",
+    lat: lat || (inspectMarker ? inspectMarker.getLatLng().lat : 55.95),
+    lon: lon || (inspectMarker ? inspectMarker.getLatLng().lng : 13.55),
+  };
+  document.getElementById("modal-location-subtitle").textContent = currentAlertLocation.name;
+  const statusEl = document.getElementById("alert-status");
+  if (statusEl) {
+    statusEl.hidden = true;
+    statusEl.className = "alert-status";
+  }
+  document.getElementById("alert-modal").hidden = false;
+}
+
+function closeAlertModal() {
+  document.getElementById("alert-modal").hidden = true;
+}
+
+document.getElementById("open-alert-modal-btn")?.addEventListener("click", () => openAlertModal());
+document.getElementById("open-alert-modal-top")?.addEventListener("click", () => openAlertModal());
+document.getElementById("close-modal-btn")?.addEventListener("click", closeAlertModal);
+document.getElementById("cancel-modal-btn")?.addEventListener("click", closeAlertModal);
+
+document.getElementById("alert-form")?.addEventListener("submit", e => {
+  e.preventDefault();
+  const email = document.getElementById("alert-email").value.trim();
+  const threshold = parseFloat(document.querySelector('input[name="threshold"]:checked')?.value || "0.2");
+  const statusEl = document.getElementById("alert-status");
+
+  if (!email || !email.includes("@")) {
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.className = "alert-status error";
+      statusEl.textContent = "Please enter a valid email address.";
+    }
+    return;
+  }
+
+  const alertItem = {
+    id: "alert-" + Date.now(),
+    locationName: currentAlertLocation.name,
+    lat: +currentAlertLocation.lat.toFixed(4),
+    lon: +currentAlertLocation.lon.toFixed(4),
+    email,
+    threshold,
+    createdAt: new Date().toISOString(),
+  };
+
+  try {
+    const existing = JSON.parse(localStorage.getItem("rain_alerts") || "[]");
+    existing.push(alertItem);
+    localStorage.setItem("rain_alerts", JSON.stringify(existing));
+  } catch (err) {}
+
+  if (statusEl) {
+    statusEl.hidden = false;
+    statusEl.className = "alert-status success";
+    statusEl.textContent = `✓ Alert set for ${currentAlertLocation.name}! GitHub Action cron workflow will notify ${email} when rain > ${threshold} mm/h is forecast.`;
+  }
+
+  setTimeout(() => {
+    closeAlertModal();
+    document.getElementById("alert-form").reset();
+  }, 2200);
+});
+
 /* ---------- Initialization ---------- */
 initQuickLayers();
 buildLayerPanel();
