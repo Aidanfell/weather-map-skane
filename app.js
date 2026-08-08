@@ -6,7 +6,7 @@
 
 /* ---------- Region & High-Resolution Grid ---------- */
 const REGION = { latMin: 55.3, latMax: 56.75, lonMin: 12.2, lonMax: 16.3 };
-const NX = 15, NY = 9; // 135 grid points (Proven reliable Open-Meteo grid)
+const NX = 10, NY = 8; // 80 grid points (proven within Open-Meteo's 100-point ceiling)
 const BUFFER_W = 320, BUFFER_H = 200; // Offscreen smooth interpolation buffer
 
 const lats = [], lons = [];
@@ -432,16 +432,21 @@ function generateFallbackData() {
   for (let iy = 0; iy < NY; iy++) {
     for (let ix = 0; ix < NX; ix++) {
       const lat = lats[iy], lon = lons[ix];
+      // Normalize longitude across Skåne (0.0 at West coast, 1.0 at East coast)
+      const westToEast = (lon - REGION.lonMin) / (REGION.lonMax - REGION.lonMin);
+
       const temps = [], precips = [], clouds = [], windSpds = [], windDirs = [];
       for (let i = 0; i < 144; i++) {
-        const wave = Math.sin((i / 12) * Math.PI);
-        const spatialVal = Math.sin(lat * 3 + lon * 2 + i * 0.1);
-        temps.push(14 + wave * 4 + (iy - NY / 2) * 0.2);
-        const rVal = Math.max(0, (Math.sin((i - 12) / 14 * Math.PI) * 4.0) + spatialVal * 1.5);
-        precips.push(rVal > 0.3 ? rVal : 0);
-        clouds.push(Math.min(100, Math.max(15, Math.floor(45 + wave * 35 + spatialVal * 20))));
-        windSpds.push(Math.max(1.5, 4.5 + Math.abs(wave) * 4 + spatialVal * 2));
-        windDirs.push((220 + Math.floor(wave * 25 + spatialVal * 30) + 360) % 360);
+        const timePhase = i / 10;
+        // Realistic frontal rain band sweeping West -> East across Skåne & Blekinge
+        const frontPosition = Math.sin(timePhase - westToEast * 4.5);
+        const rVal = Math.max(0, (frontPosition - 0.45) * 5.0);
+
+        temps.push(14 + Math.sin(timePhase) * 4 - westToEast * 0.5);
+        precips.push(rVal > 0.2 ? rVal : 0);
+        clouds.push(Math.min(100, Math.max(10, Math.floor(30 + (frontPosition + 0.5) * 45))));
+        windSpds.push(Math.max(1.5, 4.0 + (frontPosition + 0.5) * 3.5));
+        windDirs.push(225 + Math.floor(Math.sin(timePhase) * 15));
       }
       data.push({
         latitude: lat, longitude: lon,
